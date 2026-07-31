@@ -16,7 +16,10 @@ servidor, no se guardan en una base de datos y no se convierten ni recomprimen.
 - Detecta el formato real por el contenido, no solo por la extensión.
 - Calcula SHA-256 sobre los bytes originales de cada audio.
 - Permite asociar una o más capturas a cada audio y definir su orden.
-- Genera un ZIP organizado, un manifiesto PDF, un inventario CSV y copias TXT.
+- Genera una carpeta ZIP para Drive con sólo las dos carpetas de evidencia y el
+  manifiesto PDF.
+- Muestra el inventario CSV y las copias TXT por separado para revisarlos,
+  editarlos y descargarlos sin agregarlos a Drive.
 - Recalcula los hashes de los audios dentro del ZIP antes de marcarlo como
   listo.
 - Incluye un verificador independiente para comparar cualquier archivo con un

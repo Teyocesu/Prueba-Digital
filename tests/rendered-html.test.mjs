@@ -35,6 +35,11 @@ test("renderiza la aplicación judicial en español", async () => {
   assert.match(html, /Prepará tu prueba digital/);
   assert.match(html, /Procesamiento local/);
   assert.match(html, /Verificar un hash/);
+  assert.match(html, /href="\/favicon\.png"/);
+  assert.doesNotMatch(
+    html,
+    /href="https:\/\/prueba-digital\.onrender\.com\/favicon\.png"/,
+  );
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
 

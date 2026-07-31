@@ -9,7 +9,6 @@ import {
   BadgeCheck,
   Check,
   CheckCircle2,
-  Clipboard,
   CloudUpload,
   Copy,
   Download,
@@ -53,18 +52,19 @@ import {
   type ExportAudio,
   type ExportCapture,
   type ManifestSettings,
+  EVIDENCE_ZIP_FILENAME,
+  FILING_TEXT_FILENAME,
   generateEvidenceZip,
   generateFilingText,
   generateInventoryCsv,
   generateManifestPdf,
   generateManifestTxt,
+  INVENTORY_CSV_FILENAME,
+  MANIFEST_PDF_FILENAME,
+  MANIFEST_TXT_FILENAME,
 } from "../lib/exports";
 
 const APP_VERSION = "1.0.0";
-const PACKAGE_NAME = "PRUEBA_DIGITAL_AUDIOS_WHATSAPP_SHA256";
-
-const DEFAULT_INTRODUCTION =
-  "Se deja expresa constancia de que los valores hash SHA-256 consignados a continuación fueron calculados por esta parte respecto de cada uno de los archivos de audio individualizados, con anterioridad a su carga en el enlace público de solo lectura denunciado en autos.\n\nCada valor hash corresponde al contenido exacto del respectivo archivo y permite verificar posteriormente su integridad y detectar cualquier eventual modificación, sustitución, conversión o alteración.";
 
 const DEFAULT_CONCLUSION =
   "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original para su correspondiente examen técnico.";
@@ -76,19 +76,14 @@ type ManifestForm = {
   timeZone: string;
   caseReference: string;
   observations: string;
-  introduction: string;
   conclusion: string;
   publicUrl: string;
   includeCapturesWithoutAudio: boolean;
-  includeCsv: boolean;
-  includeTxt: boolean;
 };
 
 type GeneratedPackage = {
   zipUrl: string;
   pdfUrl: string;
-  csvUrl?: string;
-  manifestTxtUrl?: string;
   integrityCount: number;
   integrityTotal: number;
   zipSize: number;
@@ -117,12 +112,9 @@ function initialManifest(): ManifestForm {
       "America/Argentina/Buenos_Aires",
     caseReference: "",
     observations: "",
-    introduction: DEFAULT_INTRODUCTION,
     conclusion: DEFAULT_CONCLUSION,
     publicUrl: "",
     includeCapturesWithoutAudio: true,
-    includeCsv: true,
-    includeTxt: true,
   };
 }
 
@@ -210,14 +202,9 @@ function displayListItem(value: unknown) {
   return String(value);
 }
 
-function blobFromBytes(
-  value: Uint8Array | ArrayBuffer,
-  type: string,
-): Blob {
+function blobFromBytes(value: Uint8Array | ArrayBuffer, type: string): Blob {
   const buffer =
-    value instanceof Uint8Array
-      ? new Uint8Array(value).buffer
-      : value.slice(0);
+    value instanceof Uint8Array ? new Uint8Array(value).buffer : value.slice(0);
   return new Blob([buffer], { type });
 }
 
@@ -257,15 +244,94 @@ async function hashFileInWorker(file: File): Promise<string> {
   });
 }
 
-function downloadTextFile(text: string, filename: string) {
-  const url = URL.createObjectURL(
-    new Blob([text], { type: "text/plain;charset=utf-8" }),
-  );
+function downloadTextFile(
+  text: string,
+  filename: string,
+  type = "text/plain;charset=utf-8",
+) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = filename;
   anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function fileWithRelativePath(file: File, relativePath: string): File {
+  if (file.webkitRelativePath) return file;
+  const copy = new File([file], file.name, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
+  Object.defineProperty(copy, "webkitRelativePath", {
+    value: relativePath,
+    configurable: true,
+  });
+  return copy;
+}
+
+function readFileEntry(
+  entry: FileSystemFileEntry,
+  relativePath: string,
+): Promise<File> {
+  return new Promise((resolve, reject) => {
+    entry.file(
+      (file) => resolve(fileWithRelativePath(file, relativePath)),
+      (error) => reject(error),
+    );
+  });
+}
+
+async function readDirectoryEntries(
+  reader: FileSystemDirectoryReader,
+): Promise<FileSystemEntry[]> {
+  const entries: FileSystemEntry[] = [];
+  while (true) {
+    const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => {
+      reader.readEntries(resolve, reject);
+    });
+    if (batch.length === 0) return entries;
+    entries.push(...batch);
+  }
+}
+
+async function filesFromEntry(
+  entry: FileSystemEntry,
+  parentPath = "",
+): Promise<File[]> {
+  const relativePath = parentPath ? `${parentPath}/${entry.name}` : entry.name;
+
+  if (entry.isFile) {
+    return [
+      await readFileEntry(
+        entry as FileSystemFileEntry,
+        parentPath ? relativePath : "",
+      ),
+    ];
+  }
+
+  if (!entry.isDirectory) return [];
+  const children = await readDirectoryEntries(
+    (entry as FileSystemDirectoryEntry).createReader(),
+  );
+  const nested = await Promise.all(
+    children.map((child) => filesFromEntry(child, relativePath)),
+  );
+  return nested.flat();
+}
+
+async function filesFromDrop(dataTransfer: DataTransfer): Promise<File[]> {
+  const entries = Array.from(dataTransfer.items)
+    .map((item) => item.webkitGetAsEntry())
+    .filter((entry): entry is FileSystemEntry => Boolean(entry));
+
+  if (entries.length === 0) {
+    return Array.from(dataTransfer.files);
+  }
+
+  return (
+    await Promise.all(entries.map((entry) => filesFromEntry(entry)))
+  ).flat();
 }
 
 function Logo() {
@@ -416,12 +482,17 @@ export function PruebaDigitalApp() {
   const [ignored, setIgnored] = useState<string[]>([]);
   const [rejected, setRejected] = useState<string[]>([]);
   const [loadWarnings, setLoadWarnings] = useState<string[]>([]);
-  const [associations, setAssociations] = useState<Record<string, string[]>>({});
+  const [associations, setAssociations] = useState<Record<string, string[]>>(
+    {},
+  );
   const [audioOrder, setAudioOrder] = useState<string[]>([]);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [manifest, setManifest] = useState<ManifestForm>(initialManifest);
   const [generated, setGenerated] = useState<GeneratedPackage | null>(null);
+  const [inventoryCsvText, setInventoryCsvText] = useState("");
+  const [manifestTxtText, setManifestTxtText] = useState("");
   const [filingText, setFilingText] = useState("");
+  const [filingTextEdited, setFilingTextEdited] = useState(false);
   const [lastExportAudios, setLastExportAudios] = useState<ExportAudio[]>([]);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
   const [isDragging, setIsDragging] = useState(false);
@@ -443,11 +514,6 @@ export function PruebaDigitalApp() {
   const previewUrlsRef = useRef(new Map<string, string>());
   const generatedUrlsRef = useRef<string[]>([]);
   const batchRef = useRef(0);
-
-  useEffect(() => {
-    folderInputRef.current?.setAttribute("webkitdirectory", "");
-    folderInputRef.current?.setAttribute("directory", "");
-  }, []);
 
   useEffect(
     () => () => {
@@ -489,9 +555,7 @@ export function PruebaDigitalApp() {
           files: groupFiles,
         };
       })
-      .sort((a, b) =>
-        a.name.localeCompare(b.name, "es", { numeric: true }),
-      );
+      .sort((a, b) => a.name.localeCompare(b.name, "es", { numeric: true }));
   }, [files]);
 
   const orderedAudios = useMemo(() => {
@@ -539,12 +603,12 @@ export function PruebaDigitalApp() {
 
   const publicUrlValue = manifest.publicUrl.trim();
   const hasValidPublicUrl = isValidHttpsUrl(publicUrlValue);
-  const publicUrlIsInvalid =
-    publicUrlValue.length > 0 && !hasValidPublicUrl;
+  const publicUrlIsInvalid = publicUrlValue.length > 0 && !hasValidPublicUrl;
   const filingTextIsReady =
     hasValidPublicUrl &&
     filingText.length > 0 &&
-    !filingText.includes("[ENLACE PÚBLICO DE SOLO LECTURA]");
+    !filingText.includes("[ENLACE PÚBLICO DE SOLO LECTURA]") &&
+    filingText.includes(publicUrlValue);
 
   function registerPreviewUrl(file: EvidenceFile) {
     const url = URL.createObjectURL(
@@ -596,9 +660,7 @@ export function PruebaDigitalApp() {
       }));
 
       const nextAssociations: Record<string, string[]> = {};
-      const preparedAudios = prepared.filter(
-        (file) => file.kind === "audio",
-      );
+      const preparedAudios = prepared.filter((file) => file.kind === "audio");
       for (let index = 0; index < preparedAudios.length; index += 1) {
         const file = preparedAudios[index];
         setLoadingLabel(
@@ -641,11 +703,9 @@ export function PruebaDigitalApp() {
         ...prepared
           .filter((file) => file.kind === "audio")
           .sort((a, b) =>
-            `${a.group}/${a.name}`.localeCompare(
-              `${b.group}/${b.name}`,
-              "es",
-              { numeric: true },
-            ),
+            `${a.group}/${a.name}`.localeCompare(`${b.group}/${b.name}`, "es", {
+              numeric: true,
+            }),
           )
           .map((file) => file.id),
       ]);
@@ -670,7 +730,17 @@ export function PruebaDigitalApp() {
   function handleDrop(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     setIsDragging(false);
-    void ingestFiles(Array.from(event.dataTransfer.files));
+    const dataTransfer = event.dataTransfer;
+    void (async () => {
+      try {
+        const droppedFiles = await filesFromDrop(dataTransfer);
+        await ingestFiles(droppedFiles);
+      } catch {
+        setLoadError(
+          "No pudimos recorrer esa carpeta. Probá con el botón “Elegir carpeta”.",
+        );
+      }
+    })();
   }
 
   function toggleAssociation(audioId: string, captureId: string) {
@@ -727,10 +797,7 @@ export function PruebaDigitalApp() {
       timeZone: manifest.timeZone,
       caseReference: manifest.caseReference || undefined,
       observations: manifest.observations || undefined,
-      appVersion: APP_VERSION,
-      title:
-        "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO",
-      introduction: manifest.introduction,
+      title: "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO",
       conclusion: manifest.conclusion,
       publicUrl: manifest.publicUrl || undefined,
     };
@@ -836,46 +903,27 @@ export function PruebaDigitalApp() {
         audios: exportAudios,
         captures: exportCaptures,
         manifestPdf: pdfBytes,
-        inventoryCsv: manifest.includeCsv ? inventoryCsv : undefined,
-        manifestTxt: manifest.includeTxt ? manifestTxt : undefined,
-        filingText: nextFilingText,
       });
 
       const zipBlob = blobFromBytes(zipResult.zipBytes, "application/zip");
       const pdfBlob = blobFromBytes(pdfBytes, "application/pdf");
-      const csvBlob = new Blob([inventoryCsv], {
-        type: "text/csv;charset=utf-8",
-      });
-      const manifestTxtBlob = new Blob([manifestTxt], {
-        type: "text/plain;charset=utf-8",
-      });
 
       const zipUrl = URL.createObjectURL(zipBlob);
       const pdfUrl = URL.createObjectURL(pdfBlob);
-      const csvUrl = manifest.includeCsv
-        ? URL.createObjectURL(csvBlob)
-        : undefined;
-      const manifestTxtUrl = manifest.includeTxt
-        ? URL.createObjectURL(manifestTxtBlob)
-        : undefined;
-      generatedUrlsRef.current = [
-        zipUrl,
-        pdfUrl,
-        ...(csvUrl ? [csvUrl] : []),
-        ...(manifestTxtUrl ? [manifestTxtUrl] : []),
-      ];
+      generatedUrlsRef.current = [zipUrl, pdfUrl];
 
       const integrityCount = zipResult.integrityReport.entries.filter(
         (entry) => entry.matches,
       ).length;
 
       setLastExportAudios(exportAudios);
+      setInventoryCsvText(inventoryCsv);
+      setManifestTxtText(manifestTxt);
       setFilingText(nextFilingText);
+      setFilingTextEdited(false);
       setGenerated({
         zipUrl,
         pdfUrl,
-        csvUrl,
-        manifestTxtUrl,
         integrityCount,
         integrityTotal: exportAudios.length,
         zipSize: zipBlob.size,
@@ -895,11 +943,20 @@ export function PruebaDigitalApp() {
   }
 
   function refreshFilingText() {
+    if (
+      filingTextEdited &&
+      !window.confirm(
+        "El texto tiene cambios manuales. ¿Querés reemplazarlos al actualizar el enlace?",
+      )
+    ) {
+      return;
+    }
     const next = generateFilingText(
       lastExportAudios,
       manifest.publicUrl || undefined,
     );
     setFilingText(next);
+    setFilingTextEdited(false);
   }
 
   function clearSession(requireConfirmation = true) {
@@ -925,7 +982,10 @@ export function PruebaDigitalApp() {
     setExcludedIds(new Set());
     setManifest(initialManifest());
     setGenerated(null);
+    setInventoryCsvText("");
+    setManifestTxtText("");
     setFilingText("");
+    setFilingTextEdited(false);
     setLastExportAudios([]);
     setPreviewUrls({});
     setLoadError(null);
@@ -974,7 +1034,10 @@ export function PruebaDigitalApp() {
     event.target.value = "";
   }
 
-  const normalizedExpected = expectedHash.trim().toLowerCase().replace(/\s/g, "");
+  const normalizedExpected = expectedHash
+    .trim()
+    .toLowerCase()
+    .replace(/\s/g, "");
   const expectedIsValid =
     normalizedExpected.length === 0 || isValidSha256(normalizedExpected);
   const verificationMatches =
@@ -1002,8 +1065,7 @@ export function PruebaDigitalApp() {
                 Preparación segura de evidencia digital
               </span>
               <h1>
-                Prepará tu prueba digital,{" "}
-                <em>sin alterar los archivos.</em>
+                Prepará tu prueba digital, <em>sin alterar los archivos.</em>
               </h1>
               <p className="hero-lead">
                 Organizá audios y capturas de WhatsApp, calculá sus huellas
@@ -1011,12 +1073,18 @@ export function PruebaDigitalApp() {
                 judicial.
               </p>
               <div className="hero-actions">
-                <button className="primary-button hero-button" onClick={startPrepare}>
+                <button
+                  className="primary-button hero-button"
+                  onClick={startPrepare}
+                >
                   <FolderOpen size={19} />
                   Preparar prueba digital
                   <ArrowRight size={18} />
                 </button>
-                <button className="secondary-button hero-button" onClick={startVerify}>
+                <button
+                  className="secondary-button hero-button"
+                  onClick={startVerify}
+                >
                   <Fingerprint size={19} />
                   Verificar un hash
                 </button>
@@ -1024,8 +1092,8 @@ export function PruebaDigitalApp() {
               <div className="privacy-line">
                 <LockKeyhole size={16} aria-hidden="true" />
                 <span>
-                  Tus archivos se procesan únicamente en este dispositivo.
-                  Nunca se suben a nuestros servidores.
+                  Tus archivos se procesan únicamente en este dispositivo. Nunca
+                  se suben a nuestros servidores.
                 </span>
               </div>
               <div className="hash-explanation">
@@ -1153,8 +1221,10 @@ export function PruebaDigitalApp() {
                     <span className="drop-icon">
                       <CloudUpload size={32} />
                     </span>
-                    <h2>Arrastrá tus archivos acá</h2>
-                    <p>ZIP, audio e imágenes · también podés elegir una carpeta</p>
+                    <h2>Arrastrá una carpeta o tus archivos acá</h2>
+                    <p>
+                      También podés elegir una carpeta completa con el botón.
+                    </p>
                     <div className="drop-actions">
                       <button
                         className="primary-button"
@@ -1192,6 +1262,7 @@ export function PruebaDigitalApp() {
                   id="evidence-folder-input"
                   type="file"
                   multiple
+                  {...{ webkitdirectory: "", directory: "" }}
                   className="file-input-visually-hidden"
                   onChange={handleFileInput}
                 />
@@ -1210,23 +1281,33 @@ export function PruebaDigitalApp() {
               {files.length > 0 && (
                 <div className="loaded-summary">
                   <div className="summary-heading">
-                  <div>
+                    <div>
                       <CheckCircle2 size={20} />
                       <div>
                         <strong>Material cargado</strong>
                         <span>
-                          {files.length} archivo{files.length === 1 ? "" : "s"} en{" "}
-                          {groups.length} grupo{groups.length === 1 ? "" : "s"}
+                          {files.length} archivo{files.length === 1 ? "" : "s"}{" "}
+                          en {groups.length} grupo
+                          {groups.length === 1 ? "" : "s"}
                         </span>
                       </div>
                     </div>
-                    <button
-                      className="small-button"
-                      type="button"
-                      onClick={() => fileInputRef.current?.click()}
-                    >
-                      <Upload size={15} /> Agregar
-                    </button>
+                    <div className="summary-add-actions">
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() => folderInputRef.current?.click()}
+                      >
+                        <FolderOpen size={15} /> Agregar otra carpeta
+                      </button>
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                      >
+                        <Upload size={15} /> Agregar archivos
+                      </button>
+                    </div>
                   </div>
                   <div className="summary-stats">
                     <span>
@@ -1247,7 +1328,9 @@ export function PruebaDigitalApp() {
                     <span>
                       <AlertTriangle size={17} />
                       <strong>
-                        {loadWarnings.length + unknownFiles.length + rejected.length}
+                        {loadWarnings.length +
+                          unknownFiles.length +
+                          rejected.length}
                       </strong>{" "}
                       {loadWarnings.length +
                         unknownFiles.length +
@@ -1266,8 +1349,9 @@ export function PruebaDigitalApp() {
                   <div>
                     <strong>Hay rutas duplicadas</strong>
                     <p>
-                      Dos archivos quedarían con el mismo nombre dentro del mismo
-                      grupo. Podrás revisarlos antes de generar el paquete.
+                      Dos archivos quedarían con el mismo nombre dentro del
+                      mismo grupo. Podrás revisarlos antes de generar el
+                      paquete.
                     </p>
                   </div>
                 </div>
@@ -1362,7 +1446,9 @@ export function PruebaDigitalApp() {
                       <div className="file-table">
                         {group.files.map((file) => (
                           <div className="file-row" key={file.id}>
-                            <span className={`file-kind file-kind-${file.kind}`}>
+                            <span
+                              className={`file-kind file-kind-${file.kind}`}
+                            >
                               <EmptyIcon kind={file.kind} />
                             </span>
                             <div className="file-primary">
@@ -1439,8 +1525,8 @@ export function PruebaDigitalApp() {
                       )}
                     </strong>
                     <p>
-                      No se incluirá{unknownFiles.length === 1 ? "" : "n"} en
-                      el paquete. Revisá el nombre dentro de cada grupo.
+                      No se incluirá{unknownFiles.length === 1 ? "" : "n"} en el
+                      paquete. Revisá el nombre dentro de cada grupo.
                     </p>
                   </div>
                 </div>
@@ -1510,7 +1596,9 @@ export function PruebaDigitalApp() {
                       <div className="audio-content">
                         <div className="audio-card-heading">
                           <div>
-                            <span className="group-pill">Grupo {audio.group}</span>
+                            <span className="group-pill">
+                              Grupo {audio.group}
+                            </span>
                             <h2 title={audio.name}>{audio.name}</h2>
                           </div>
                           <button
@@ -1554,7 +1642,8 @@ export function PruebaDigitalApp() {
                                 {(associations[audio.id] ?? []).length > 0 && (
                                   <span className="selected-count">
                                     <Check size={14} />{" "}
-                                    {(associations[audio.id] ?? []).length} elegida
+                                    {(associations[audio.id] ?? []).length}{" "}
+                                    elegida
                                     {(associations[audio.id] ?? []).length === 1
                                       ? ""
                                       : "s"}
@@ -1576,10 +1665,15 @@ export function PruebaDigitalApp() {
                                         key={capture.id}
                                         aria-pressed={selected}
                                         onClick={() =>
-                                          toggleAssociation(audio.id, capture.id)
+                                          toggleAssociation(
+                                            audio.id,
+                                            capture.id,
+                                          )
                                         }
                                       >
-                                        {detectedMime(capture).includes("heic") ? (
+                                        {detectedMime(capture).includes(
+                                          "heic",
+                                        ) ? (
                                           <span className="heic-placeholder">
                                             <FileImage size={26} />
                                             HEIC
@@ -1680,7 +1774,10 @@ export function PruebaDigitalApp() {
               </div>
 
               {audiosWithoutCapture.length > 0 && (
-                <div className="alert alert-warning association-summary" role="status">
+                <div
+                  className="alert alert-warning association-summary"
+                  role="status"
+                >
                   <AlertTriangle size={19} />
                   <div>
                     <strong>
@@ -1738,7 +1835,10 @@ export function PruebaDigitalApp() {
                           type="datetime-local"
                           value={manifest.calculationDate}
                           onChange={(event) =>
-                            updateManifest("calculationDate", event.target.value)
+                            updateManifest(
+                              "calculationDate",
+                              event.target.value,
+                            )
                           }
                         />
                       </label>
@@ -1781,22 +1881,14 @@ export function PruebaDigitalApp() {
                     <div className="form-section-title">
                       <span>2</span>
                       <div>
-                        <h2>Textos del manifiesto</h2>
-                        <p>Podés editarlos antes de generar el PDF.</p>
+                        <h2>Constancia final</h2>
+                        <p>
+                          Este texto aparece al final del PDF y podés editarlo.
+                        </p>
                       </div>
                     </div>
                     <label>
-                      <span>Texto introductorio</span>
-                      <textarea
-                        rows={7}
-                        value={manifest.introduction}
-                        onChange={(event) =>
-                          updateManifest("introduction", event.target.value)
-                        }
-                      />
-                    </label>
-                    <label>
-                      <span>Constancia final</span>
+                      <span>Texto de cierre</span>
                       <textarea
                         rows={7}
                         value={manifest.conclusion}
@@ -1811,10 +1903,10 @@ export function PruebaDigitalApp() {
                     <div className="form-section-title">
                       <span>3</span>
                       <div>
-                        <h2>Enlace público y archivos auxiliares</h2>
+                        <h2>Enlace público y contenido de la carpeta</h2>
                         <p>
-                          Si querés que aparezca en el PDF y el ZIP, pegalo antes
-                          de generar.
+                          Si querés que el enlace aparezca en el PDF, pegalo
+                          antes de generar.
                         </p>
                       </div>
                     </div>
@@ -1863,51 +1955,25 @@ export function PruebaDigitalApp() {
                           </small>
                         </span>
                       </label>
-                      <label className="check-row">
-                        <input
-                          type="checkbox"
-                          checked={manifest.includeCsv}
-                          onChange={(event) =>
-                            updateManifest("includeCsv", event.target.checked)
-                          }
-                        />
-                        <span>
-                          <strong>Incluir inventario CSV</strong>
-                          <small>Útil para revisar los datos en una planilla.</small>
-                        </span>
-                      </label>
-                      <label className="check-row">
-                        <input
-                          type="checkbox"
-                          checked={manifest.includeTxt}
-                          onChange={(event) =>
-                            updateManifest("includeTxt", event.target.checked)
-                          }
-                        />
-                        <span>
-                          <strong>Incluir manifiesto TXT</strong>
-                          <small>Una copia de texto plano para archivo.</small>
-                        </span>
-                      </label>
                     </div>
                   </div>
                 </div>
 
                 <aside className="manifest-sidebar">
                   <div className="package-preview">
-                    <span className="mini-label">Resumen del paquete</span>
-                    <h2>{PACKAGE_NAME}</h2>
+                    <span className="mini-label">
+                      Contenido exacto para Google Drive
+                    </span>
+                    <h2>Carpeta para subir</h2>
                     <ul>
                       <li>
-                        <span className="tree-branch">01</span>
+                        <span className="tree-branch">
+                          <FolderOpen size={15} />
+                        </span>
                         <div>
-                          <strong>Audios incluidos</strong>
+                          <strong>01_Audios_con_capturas</strong>
                           <small>
-                            {quantityLabel(
-                              includedAudios.length,
-                              "audio",
-                            )}{" "}
-                            ·{" "}
+                            {quantityLabel(includedAudios.length, "audio")} ·{" "}
                             {quantityLabel(
                               includedAudios.length -
                                 audiosWithoutCapture.length,
@@ -1923,33 +1989,40 @@ export function PruebaDigitalApp() {
                           </small>
                         </div>
                       </li>
-                      {manifest.includeCapturesWithoutAudio && (
-                        <li>
-                          <span className="tree-branch">02</span>
-                          <div>
-                            <strong>Capturas sin audio</strong>
-                            <small>
-                              {quantityLabel(
-                                images.filter(
-                                  (image) =>
-                                    !includedAudios.some(
-                                      (audio) => audio.groupId === image.groupId,
-                                    ),
-                                ).length,
-                                "captura",
-                              )}
-                            </small>
-                          </div>
-                        </li>
-                      )}
+                      <li>
+                        <span className="tree-branch">
+                          <FolderOpen size={15} />
+                        </span>
+                        <div>
+                          <strong>02_Capturas_sin_audio</strong>
+                          <small>
+                            {manifest.includeCapturesWithoutAudio
+                              ? quantityLabel(
+                                  images.filter(
+                                    (image) =>
+                                      !includedAudios.some(
+                                        (audio) =>
+                                          audio.groupId === image.groupId,
+                                      ),
+                                  ).length,
+                                  "captura",
+                                )
+                              : "Carpeta vacía"}
+                          </small>
+                        </div>
+                      </li>
                       <li>
                         <FileText size={18} />
                         <div>
-                          <strong>Manifiesto PDF</strong>
-                          <small>Hash completo y páginas numeradas</small>
+                          <strong>{MANIFEST_PDF_FILENAME}</strong>
+                          <small>PDF con nombres y huellas SHA-256</small>
                         </div>
                       </li>
                     </ul>
+                    <p className="package-preview-note">
+                      El inventario CSV y los textos quedan fuera de esta
+                      carpeta. Podrás verlos, editarlos y descargarlos aparte.
+                    </p>
                   </div>
                   <div className="integrity-promise">
                     <ShieldCheck size={23} />
@@ -2034,22 +2107,27 @@ export function PruebaDigitalApp() {
                 <a
                   className="download-card is-primary"
                   href={generated.zipUrl}
-                  download={`${PACKAGE_NAME}.zip`}
+                  download={EVIDENCE_ZIP_FILENAME}
                 >
                   <span className="download-icon">
                     <FileArchive size={25} />
                   </span>
                   <div>
-                    <span className="mini-label">Paso principal</span>
-                    <h2>Descargar ZIP completo</h2>
-                    <p>{formatBytes(generated.zipSize)}</p>
+                    <span className="mini-label">
+                      Carpeta para Google Drive
+                    </span>
+                    <h2>Descargar carpeta en ZIP</h2>
+                    <p>
+                      {formatBytes(generated.zipSize)} · solo 2 carpetas y el
+                      PDF
+                    </p>
                   </div>
                   <Download size={20} />
                 </a>
                 <a
                   className="download-card"
                   href={generated.pdfUrl}
-                  download="MANIFIESTO_SHA256_AUDIOS.pdf"
+                  download={MANIFEST_PDF_FILENAME}
                 >
                   <span className="download-icon">
                     <FileText size={24} />
@@ -2061,40 +2139,6 @@ export function PruebaDigitalApp() {
                   </div>
                   <Download size={20} />
                 </a>
-                {generated.csvUrl && (
-                  <a
-                    className="download-card"
-                    href={generated.csvUrl}
-                    download="INVENTARIO_AUDIOS_SHA256.csv"
-                  >
-                    <span className="download-icon">
-                      <FileCheck2 size={24} />
-                    </span>
-                    <div>
-                      <span className="mini-label">Archivo opcional</span>
-                      <h2>Inventario CSV</h2>
-                      <p>Compatible con planillas</p>
-                    </div>
-                    <Download size={20} />
-                  </a>
-                )}
-                {generated.manifestTxtUrl && (
-                  <a
-                    className="download-card"
-                    href={generated.manifestTxtUrl}
-                    download="MANIFIESTO_SHA256_AUDIOS.txt"
-                  >
-                    <span className="download-icon">
-                      <Clipboard size={24} />
-                    </span>
-                    <div>
-                      <span className="mini-label">Archivo opcional</span>
-                      <h2>Manifiesto TXT</h2>
-                      <p>Texto plano UTF-8</p>
-                    </div>
-                    <Download size={20} />
-                  </a>
-                )}
               </div>
               <a
                 className="pdf-preview-link"
@@ -2105,6 +2149,90 @@ export function PruebaDigitalApp() {
                 <ExternalLink size={16} />
                 Ver el manifiesto PDF antes de presentarlo
               </a>
+
+              <section className="auxiliary-documents">
+                <div className="auxiliary-heading">
+                  <div>
+                    <span className="mini-label">Para revisar o conservar</span>
+                    <h2>Documentos auxiliares</h2>
+                    <p>
+                      Se muestran acá y no se incluyen en el ZIP ni en la
+                      carpeta de Google Drive.
+                    </p>
+                  </div>
+                  <span className="outside-drive-badge">
+                    <Info size={15} /> Fuera de Drive
+                  </span>
+                </div>
+                <div className="auxiliary-grid">
+                  <article className="auxiliary-editor">
+                    <div className="card-title-row">
+                      <div>
+                        <span className="mini-label">Editable</span>
+                        <h3>Inventario CSV</h3>
+                      </div>
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() =>
+                          downloadTextFile(
+                            inventoryCsvText,
+                            INVENTORY_CSV_FILENAME,
+                            "text/csv;charset=utf-8",
+                          )
+                        }
+                      >
+                        <Download size={15} /> Descargar CSV
+                      </button>
+                    </div>
+                    <p>
+                      Podés corregir el texto antes de descargarlo. No modifica
+                      el PDF ni las huellas SHA-256.
+                    </p>
+                    <textarea
+                      value={inventoryCsvText}
+                      onChange={(event) =>
+                        setInventoryCsvText(event.target.value)
+                      }
+                      aria-label="Contenido editable del inventario CSV"
+                      spellCheck={false}
+                    />
+                  </article>
+
+                  <article className="auxiliary-editor">
+                    <div className="card-title-row">
+                      <div>
+                        <span className="mini-label">Editable</span>
+                        <h3>Manifiesto TXT</h3>
+                      </div>
+                      <button
+                        className="small-button"
+                        type="button"
+                        onClick={() =>
+                          downloadTextFile(
+                            manifestTxtText,
+                            MANIFEST_TXT_FILENAME,
+                          )
+                        }
+                      >
+                        <Download size={15} /> Descargar TXT
+                      </button>
+                    </div>
+                    <p>
+                      Es una copia en texto plano para consulta. Tampoco se sube
+                      a Drive.
+                    </p>
+                    <textarea
+                      value={manifestTxtText}
+                      onChange={(event) =>
+                        setManifestTxtText(event.target.value)
+                      }
+                      aria-label="Contenido editable del manifiesto TXT"
+                      spellCheck={false}
+                    />
+                  </article>
+                </div>
+              </section>
 
               <div className="result-layout">
                 <article className="filing-card">
@@ -2152,15 +2280,19 @@ export function PruebaDigitalApp() {
                     ) : (
                       <>
                         <AlertTriangle size={18} />
-                        Subí el material a Drive, comprobá que el enlace abra sin
-                        iniciar sesión y pegalo en el recuadro de la derecha.
+                        Subí el material a Drive, comprobá que el enlace abra
+                        sin iniciar sesión y pegalo en el recuadro de la
+                        derecha.
                       </>
                     )}
                   </div>
                   <textarea
                     className="filing-textarea"
                     value={filingText}
-                    onChange={(event) => setFilingText(event.target.value)}
+                    onChange={(event) => {
+                      setFilingText(event.target.value);
+                      setFilingTextEdited(true);
+                    }}
                     aria-label="Texto para incorporar al escrito"
                   />
                   <button
@@ -2168,10 +2300,7 @@ export function PruebaDigitalApp() {
                     type="button"
                     disabled={!filingTextIsReady}
                     onClick={() =>
-                      downloadTextFile(
-                        filingText,
-                        "TEXTO_PARA_INCORPORAR_AL_ESCRITO.txt",
-                      )
+                      downloadTextFile(filingText, FILING_TEXT_FILENAME)
                     }
                   >
                     <Download size={16} />{" "}
@@ -2188,19 +2317,25 @@ export function PruebaDigitalApp() {
                   <span className="mini-label">Publicación opcional</span>
                   <h2>Subir a Google Drive</h2>
                   <p>
-                    La carga es manual para que conserves el control del material
-                    y confirmes expresamente cuándo hacerlo público.
+                    La carga es manual para que conserves el control del
+                    material y confirmes expresamente cuándo hacerlo público.
                   </p>
                   <ol>
                     <li>
-                      <span>1</span> Subí el ZIP o la carpeta extraída.
+                      <span>1</span> Descargá el ZIP y abrilo para obtener la
+                      carpeta.
                     </li>
                     <li>
-                      <span>2</span> Elegí “Cualquier persona con el enlace” y
+                      <span>2</span> En Drive, elegí “Nuevo” → “Subir carpeta” y
+                      seleccioná esa carpeta.
+                    </li>
+                    <li>
+                      <span>3</span> Elegí “Cualquier persona con el enlace” y
                       “Lector”.
                     </li>
                     <li>
-                      <span>3</span> Probá el enlace en una ventana de incógnito.
+                      <span>4</span> Probá el enlace en una ventana de
+                      incógnito.
                     </li>
                   </ol>
                   <a
@@ -2244,13 +2379,13 @@ export function PruebaDigitalApp() {
                   <div className="result-link-note">
                     <Info size={16} />
                     Este botón solo actualiza el texto para el escrito. Para
-                    incluir el enlace en el PDF y el ZIP, volvé al manifiesto y
-                    generá el paquete nuevamente.
+                    incluir el enlace en el PDF guardado dentro del ZIP, volvé
+                    al manifiesto y generá el paquete nuevamente.
                   </div>
                   <div className="public-warning">
                     <AlertTriangle size={16} />
-                    Un enlace público puede ser visto o descargado por cualquiera
-                    que lo tenga.
+                    Un enlace público puede ser visto o descargado por
+                    cualquiera que lo tenga.
                   </div>
                 </aside>
               </div>
@@ -2288,8 +2423,8 @@ export function PruebaDigitalApp() {
             <span className="eyebrow">Verificación independiente</span>
             <h1>Verificá la huella de cualquier archivo.</h1>
             <p>
-              Calculá su SHA-256 o comparalo con un valor esperado. El archivo se
-              procesa localmente y no se modifica.
+              Calculá su SHA-256 o comparalo con un valor esperado. El archivo
+              se procesa localmente y no se modifica.
             </p>
           </div>
 

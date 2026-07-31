@@ -52,7 +52,11 @@ body {
   min-height: 100vh;
   margin: 0;
   background:
-    radial-gradient(circle at 12% 0%, rgba(130, 54, 62, 0.045), transparent 28rem),
+    radial-gradient(
+      circle at 12% 0%,
+      rgba(130, 54, 62, 0.045),
+      transparent 28rem
+    ),
     var(--paper);
   color: var(--ink);
   font-family: var(--font-geist-sans), "Helvetica Neue", Arial, sans-serif;
@@ -307,7 +311,11 @@ a {
 .home-copy h1 {
   max-width: 760px;
   margin: 0;
-  font-family: Iowan Old Style, Baskerville, "Times New Roman", serif;
+  font-family:
+    Iowan Old Style,
+    Baskerville,
+    "Times New Roman",
+    serif;
   font-size: clamp(52px, 6vw, 82px);
   font-weight: 500;
   letter-spacing: -0.056em;
@@ -391,7 +399,11 @@ a {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: var(--radius-xl);
   background:
-    radial-gradient(circle at 100% 0%, rgba(154, 122, 63, 0.2), transparent 47%),
+    radial-gradient(
+      circle at 100% 0%,
+      rgba(154, 122, 63, 0.2),
+      transparent 47%
+    ),
     var(--forest-dark);
   color: #fff;
   box-shadow: var(--shadow-lg);
@@ -428,7 +440,10 @@ a {
 
 .process-card-header h2 {
   margin: 5px 0 0;
-  font-family: Iowan Old Style, Baskerville, serif;
+  font-family:
+    Iowan Old Style,
+    Baskerville,
+    serif;
   font-size: 23px;
   font-weight: 500;
 }
@@ -502,7 +517,10 @@ a {
   bottom: 0;
   left: 18px;
   width: 1px;
-  background: linear-gradient(rgba(255, 255, 255, 0.15), rgba(255, 255, 255, 0.04));
+  background: linear-gradient(
+    rgba(255, 255, 255, 0.15),
+    rgba(255, 255, 255, 0.04)
+  );
 }
 
 .process-check {
@@ -722,7 +740,11 @@ a {
 .verify-heading h1,
 .result-hero h1 {
   margin: 8px 0 0;
-  font-family: Iowan Old Style, Baskerville, "Times New Roman", serif;
+  font-family:
+    Iowan Old Style,
+    Baskerville,
+    "Times New Roman",
+    serif;
   font-size: clamp(36px, 5vw, 52px);
   font-weight: 500;
   letter-spacing: -0.04em;
@@ -748,7 +770,10 @@ a {
 
 .heading-stat strong {
   color: var(--forest);
-  font-family: Iowan Old Style, Baskerville, serif;
+  font-family:
+    Iowan Old Style,
+    Baskerville,
+    serif;
   font-size: 36px;
   font-weight: 500;
   line-height: 1;
@@ -897,6 +922,13 @@ a {
   margin-top: 3px;
   color: var(--ink-faint);
   font-size: 13px;
+}
+
+.summary-add-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .small-button {
@@ -1241,7 +1273,10 @@ a {
 
 .audio-order > span {
   color: var(--terracotta);
-  font-family: Iowan Old Style, Baskerville, serif;
+  font-family:
+    Iowan Old Style,
+    Baskerville,
+    serif;
   font-size: 28px;
 }
 
@@ -1878,12 +1913,23 @@ a {
 
 .package-preview li strong {
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .package-preview li small {
   margin-top: 3px;
   color: var(--ink-faint);
   font-size: 12px;
+}
+
+.package-preview-note {
+  margin: 16px 0 0;
+  padding: 12px;
+  border-radius: 9px;
+  background: var(--paper);
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .integrity-promise {
@@ -2060,6 +2106,93 @@ a {
 .pdf-preview-link:hover {
   text-decoration: underline;
   text-underline-offset: 3px;
+}
+
+.auxiliary-documents {
+  margin-top: 28px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: var(--surface-soft);
+}
+
+.auxiliary-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.auxiliary-heading h2 {
+  margin: 5px 0 0;
+  font-size: 19px;
+}
+
+.auxiliary-heading p {
+  max-width: 680px;
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.outside-drive-badge {
+  display: inline-flex;
+  min-height: 36px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  padding: 0 11px;
+  border: 1px solid rgba(159, 64, 62, 0.17);
+  border-radius: 999px;
+  background: var(--terracotta-soft);
+  color: var(--terracotta);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.auxiliary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.auxiliary-editor {
+  min-width: 0;
+  padding: 19px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.auxiliary-editor h3 {
+  margin: 5px 0 0;
+  font-size: 15px;
+}
+
+.auxiliary-editor > p {
+  margin: 12px 0 0;
+  color: var(--ink-faint);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.auxiliary-editor textarea {
+  width: 100%;
+  min-height: 290px;
+  margin-top: 14px;
+  resize: vertical;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
 }
 
 .result-layout {
@@ -2528,7 +2661,8 @@ a {
   }
 
   .manifest-layout,
-  .result-layout {
+  .result-layout,
+  .auxiliary-grid {
     grid-template-columns: 1fr;
   }
 
@@ -2664,6 +2798,22 @@ a {
     width: 100%;
   }
 
+  .summary-heading {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .summary-add-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    justify-content: stretch;
+  }
+
+  .summary-add-actions button {
+    width: 100%;
+  }
+
   .summary-stats,
   .review-summary {
     grid-template-columns: 1fr 1fr;
@@ -2758,6 +2908,26 @@ a {
   .card-title-row {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .auxiliary-documents {
+    padding: 19px 16px;
+  }
+
+  .auxiliary-heading {
+    flex-direction: column;
+  }
+
+  .outside-drive-badge {
+    align-self: flex-start;
+  }
+
+  .auxiliary-editor {
+    padding: 16px;
+  }
+
+  .auxiliary-editor .small-button {
+    width: 100%;
   }
 
   .filing-textarea {

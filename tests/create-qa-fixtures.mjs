@@ -80,6 +80,27 @@ await writeZip("D.zip", [
   ["Captura segunda.png", onePixelPng],
 ]);
 
+const folderRoot = resolve(
+  outputDirectory,
+  "folder-case",
+  "MATERIAL_PARA_SELECCIONAR",
+);
+await Promise.all(
+  ["A", "D", "F", ".oculta", "__MACOSX"].map((name) =>
+    mkdir(resolve(folderRoot, name), { recursive: true }),
+  ),
+);
+await Promise.all([
+  writeFile(resolve(folderRoot, "A", "Audio A original.ogg"), audioA),
+  writeFile(resolve(folderRoot, "A", "Captura A original.png"), onePixelPng),
+  writeFile(resolve(folderRoot, "D", "Audio D original.ogg"), audioD1),
+  writeFile(resolve(folderRoot, "D", "Captura D original.png"), onePixelPng),
+  writeFile(resolve(folderRoot, "F", "Captura sin audio.png"), onePixelPng),
+  writeFile(resolve(folderRoot, ".DS_Store"), Uint8Array.from([1, 2, 3])),
+  writeFile(resolve(folderRoot, ".oculta", "secreto.png"), onePixelPng),
+  writeFile(resolve(folderRoot, "__MACOSX", "._Audio A original.ogg"), audioA),
+]);
+
 await writeFile(resolve(outputDirectory, "control.bin"), audioA);
 const modified = Uint8Array.from(audioA);
 modified[modified.length - 1] ^= 0x01;
