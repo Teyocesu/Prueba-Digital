@@ -144,8 +144,7 @@ const CRC32_TABLE = (() => {
   for (let index = 0; index < table.length; index += 1) {
     let value = index;
     for (let bit = 0; bit < 8; bit += 1) {
-      value =
-        value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
     }
     table[index] = value >>> 0;
   }
@@ -156,9 +155,7 @@ type BinaryInput = Blob | ArrayBuffer | Uint8Array;
 
 type ZipObjectWithMetadata = JSZipObject & {
   unsafeOriginalName?: string;
-  internalStream?: (
-    type: "uint8array",
-  ) => JSZip.JSZipStreamHelper<Uint8Array>;
+  internalStream?: (type: "uint8array") => JSZip.JSZipStreamHelper<Uint8Array>;
   _data?: {
     compressedSize?: number;
     uncompressedSize?: number;
@@ -262,9 +259,7 @@ function zipMetadataNumber(
     : undefined;
 }
 
-function zipExpectedCrc32(
-  entry: ZipObjectWithMetadata,
-): number | undefined {
+function zipExpectedCrc32(entry: ZipObjectWithMetadata): number | undefined {
   const value = entry._data?.crc32;
   return typeof value === "number" && Number.isInteger(value)
     ? value >>> 0
@@ -287,18 +282,16 @@ function inspectZipCentralDirectory(
 ): ZipCentralDirectorySummary {
   const bytes = new Uint8Array(input);
   if (bytes.length < 22) {
-    throw new ZipSafetyError("El ZIP no contiene un directorio central válido.");
+    throw new ZipSafetyError(
+      "El ZIP no contiene un directorio central válido.",
+    );
   }
 
   const view = new DataView(input);
   const earliestEocd = Math.max(0, bytes.length - 22 - 0xffff);
   let eocdOffset = -1;
 
-  for (
-    let offset = bytes.length - 22;
-    offset >= earliestEocd;
-    offset -= 1
-  ) {
+  for (let offset = bytes.length - 22; offset >= earliestEocd; offset -= 1) {
     if (
       view.getUint32(offset, true) === 0x06054b50 &&
       offset + 22 + view.getUint16(offset + 20, true) === bytes.length
@@ -343,8 +336,7 @@ function inspectZipCentralDirectory(
     );
   }
 
-  const centralDirectoryEnd =
-    centralDirectoryOffset + centralDirectorySize;
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
   if (
     centralDirectoryEnd < centralDirectoryOffset ||
     centralDirectoryEnd > eocdOffset
@@ -372,8 +364,7 @@ function inspectZipCentralDirectory(
     const extraLength = view.getUint16(cursor + 30, true);
     const commentLength = view.getUint16(cursor + 32, true);
     const localHeaderOffset = view.getUint32(cursor + 42, true);
-    const nextCursor =
-      cursor + 46 + nameLength + extraLength + commentLength;
+    const nextCursor = cursor + 46 + nameLength + extraLength + commentLength;
 
     if (flags & 0x0001) {
       throw new ZipSafetyError(
@@ -454,9 +445,7 @@ async function extractZipEntrySafely(
         copy.set(chunk);
         parts.push(copy);
         for (const byte of copy) {
-          checksum =
-            CRC32_TABLE[(checksum ^ byte) & 0xff] ^
-            (checksum >>> 8);
+          checksum = CRC32_TABLE[(checksum ^ byte) & 0xff] ^ (checksum >>> 8);
         }
       })
       .on("error", (error) => {
@@ -474,7 +463,7 @@ async function extractZipEntrySafely(
           );
           return;
         }
-        if (((checksum ^ 0xffffffff) >>> 0) !== expectedCrc32) {
+        if ((checksum ^ 0xffffffff) >>> 0 !== expectedCrc32) {
           fail(
             new ZipSafetyError(
               "La entrada no superó la verificación CRC del ZIP y puede estar dañada.",
@@ -500,11 +489,7 @@ function getRelativeFilePath(file: File): string {
 }
 
 function isDangerousSelectedFilePath(file: File, path: string): boolean {
-  if (
-    !file.name ||
-    file.name.includes("\0") ||
-    file.name.includes("/")
-  ) {
+  if (!file.name || file.name.includes("\0") || file.name.includes("/")) {
     return true;
   }
 
@@ -518,6 +503,49 @@ function isDangerousSelectedFilePath(file: File, path: string): boolean {
     path.length > 4_096 ||
     path.split("/").some((segment) => segment === "..")
   );
+}
+
+function commonSelectedFolderRoot(files: readonly File[]): string | undefined {
+  let root: string | undefined;
+  let folderFileCount = 0;
+
+  for (const file of files) {
+    const path = getRelativeFilePath(file);
+    if (
+      !file.webkitRelativePath ||
+      isDangerousSelectedFilePath(file, path) ||
+      isMacOSJunk(path)
+    ) {
+      continue;
+    }
+
+    const segments = pathSegments(path);
+    if (segments.length < 2) {
+      continue;
+    }
+
+    const candidate = segments[0];
+    if (root !== undefined && candidate !== root) {
+      return undefined;
+    }
+
+    root = candidate;
+    folderFileCount += 1;
+  }
+
+  return folderFileCount > 0 ? root : undefined;
+}
+
+function stripSelectedFolderRoot(
+  path: string,
+  commonRoot: string | undefined,
+): string {
+  if (!commonRoot || !path.startsWith(`${commonRoot}/`)) {
+    return path;
+  }
+
+  const relativePath = path.slice(commonRoot.length + 1);
+  return relativePath.length > 0 ? relativePath : path;
 }
 
 function groupNameForZip(fileName: string): string {
@@ -679,29 +707,25 @@ export function isMacOSJunk(path: string): boolean {
   }
 
   const basename = segments.at(-1) ?? "";
-  return basename === ".DS_Store" || basename.startsWith("._");
+  return (
+    basename === ".DS_Store" ||
+    basename.startsWith("._") ||
+    segments.some((segment) => segment.startsWith("."))
+  );
 }
 
 /**
  * Detects content from magic bytes. File names and MIME declarations are
  * intentionally not considered.
  */
-export function detectFormat(
-  input: ArrayBuffer | Uint8Array,
-): DetectedFormat {
+export function detectFormat(input: ArrayBuffer | Uint8Array): DetectedFormat {
   const bytes = asBytes(input);
 
-  if (
-    asciiEquals(bytes, 0, "RIFF") &&
-    asciiEquals(bytes, 8, "WAVE")
-  ) {
+  if (asciiEquals(bytes, 0, "RIFF") && asciiEquals(bytes, 8, "WAVE")) {
     return "wav";
   }
 
-  if (
-    asciiEquals(bytes, 0, "RIFF") &&
-    asciiEquals(bytes, 8, "WEBP")
-  ) {
+  if (asciiEquals(bytes, 0, "RIFF") && asciiEquals(bytes, 8, "WEBP")) {
     return "webp";
   }
 
@@ -764,22 +788,14 @@ export function detectFormat(
       return "heic";
     }
 
-    const m4aBrands = new Set([
-      "M4A ",
-      "M4B ",
-      "M4P ",
-    ]);
+    const m4aBrands = new Set(["M4A ", "M4B ", "M4P "]);
     if (brands.some((brand) => m4aBrands.has(brand))) {
       return "m4a";
     }
   }
 
   // ADTS AAC has a 12-bit sync word and a zero MPEG layer.
-  if (
-    bytes.length >= 2 &&
-    bytes[0] === 0xff &&
-    (bytes[1] & 0xf6) === 0xf0
-  ) {
+  if (bytes.length >= 2 && bytes[0] === 0xff && (bytes[1] & 0xf6) === 0xf0) {
     return "aac";
   }
 
@@ -878,10 +894,7 @@ export function readWavDuration(
     const chunkDataStart = offset + 8;
     const chunkDataEnd = chunkDataStart + chunkSize;
 
-    if (
-      chunkDataEnd < chunkDataStart ||
-      chunkDataEnd > bytes.length
-    ) {
+    if (chunkDataEnd < chunkDataStart || chunkDataEnd > bytes.length) {
       return null;
     }
 
@@ -975,6 +988,7 @@ export async function loadEvidenceFiles(
   const warnings: string[] = [];
   let fileSequence = 0;
   let acceptedUncompressedBytes = 0;
+  const selectedFolderRoot = commonSelectedFolderRoot(inputFiles);
 
   const nextFileId = (): string => {
     fileSequence += 1;
@@ -993,14 +1007,13 @@ export async function loadEvidenceFiles(
     if (isDangerousSelectedFilePath(inputFile, inputPath)) {
       rejected.push({
         path: inputPath,
-        reason: "La ruta es absoluta o contiene segmentos de navegación peligrosos.",
+        reason:
+          "La ruta es absoluta o contiene segmentos de navegación peligrosos.",
       });
       continue;
     }
 
-    const signature = new Uint8Array(
-      await inputFile.slice(0, 4).arrayBuffer(),
-    );
+    const signature = new Uint8Array(await inputFile.slice(0, 4).arrayBuffer());
     const isZip =
       extensionKey(inputFile.name) === "zip" || isZipSignature(signature);
 
@@ -1069,10 +1082,7 @@ export async function loadEvidenceFiles(
           continue;
         }
 
-        const uncompressedSize = zipMetadataNumber(
-          entry,
-          "uncompressedSize",
-        );
+        const uncompressedSize = zipMetadataNumber(entry, "uncompressedSize");
         const compressedSize = zipMetadataNumber(entry, "compressedSize");
         const expectedCrc32 = zipExpectedCrc32(entry);
         if (
@@ -1144,7 +1154,7 @@ export async function loadEvidenceFiles(
             ? -1
             : left.originalPath > right.originalPath
               ? 1
-            : 0,
+              : 0,
         );
 
       let extractionUnsafeReason: string | undefined;
@@ -1165,7 +1175,8 @@ export async function loadEvidenceFiles(
           rejected.push({
             path: originalPath,
             sourceFile: inputFile.name,
-            reason: "La entrada del ZIP no contiene un nombre de archivo seguro.",
+            reason:
+              "La entrada del ZIP no contiene un nombre de archivo seguro.",
           });
           continue;
         }
@@ -1174,10 +1185,7 @@ export async function loadEvidenceFiles(
           continue;
         }
 
-        const expectedSize = zipMetadataNumber(
-          entry,
-          "uncompressedSize",
-        );
+        const expectedSize = zipMetadataNumber(entry, "uncompressedSize");
         const expectedCrc32 = zipExpectedCrc32(entry);
         if (expectedSize === undefined || expectedCrc32 === undefined) {
           rejected.push({
@@ -1223,7 +1231,9 @@ export async function loadEvidenceFiles(
         );
         addFileToGroup(group, evidence);
         if (evidence.warning) {
-          warnings.push(`${group.name} / ${evidence.name}: ${evidence.warning}`);
+          warnings.push(
+            `${group.name} / ${evidence.name}: ${evidence.warning}`,
+          );
         }
       }
 
@@ -1266,20 +1276,21 @@ export async function loadEvidenceFiles(
     }
     acceptedUncompressedBytes += inputFile.size;
 
-    const segments = pathSegments(inputPath);
+    const folderPath = stripSelectedFolderRoot(inputPath, selectedFolderRoot);
+    const segments = pathSegments(folderPath);
     const isFolderFile =
-      Boolean(inputFile.webkitRelativePath) && segments.length > 1;
-    const groupName = isFolderFile ? segments[0] : "Archivos sueltos";
+      Boolean(inputFile.webkitRelativePath) &&
+      pathSegments(inputPath).length > 1;
+    const groupName = isFolderFile
+      ? segments.length > 1
+        ? segments[0]
+        : (selectedFolderRoot ?? pathSegments(inputPath)[0])
+      : "Archivos sueltos";
     const groupKey = isFolderFile ? `folder:${groupName}` : "loose";
-    const group = getOrCreateGroup(
-      groupMap,
-      groups,
-      groupKey,
-      groupName,
-    );
+    const group = getOrCreateGroup(groupMap, groups, groupKey, groupName);
     const evidence = await processEvidenceFile(
       inputFile,
-      inputPath,
+      isFolderFile ? folderPath : inputPath,
       group,
       isFolderFile ? "folder" : "loose",
       nextFileId(),

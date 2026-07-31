@@ -9,7 +9,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
-  EXPORT_ROOT_FOLDER,
+  EVIDENCE_ZIP_FILENAME,
   EvidenceIntegrityError,
   FILING_TEXT_FILENAME,
   INVENTORY_CSV_FILENAME,
@@ -83,10 +83,7 @@ function decodedPdfContent(pdf: PDFDocument): string {
   return chunks.join("\n");
 }
 
-function decodedPdfPageContent(
-  pdf: PDFDocument,
-  pageIndex: number,
-): string {
+function decodedPdfPageContent(pdf: PDFDocument, pageIndex: number): string {
   const contents = pdf.getPage(pageIndex).node.Contents();
   if (!contents) {
     return "";
@@ -100,13 +97,9 @@ function decodedPdfPageContent(
       : [contents];
 
   return streams
-    .filter((stream): stream is PDFRawStream =>
-      stream instanceof PDFRawStream,
-    )
+    .filter((stream): stream is PDFRawStream => stream instanceof PDFRawStream)
     .map((stream) =>
-      new TextDecoder("latin1").decode(
-        decodePDFRawStream(stream).decode(),
-      ),
+      new TextDecoder("latin1").decode(decodePDFRawStream(stream).decode()),
     )
     .join("\n");
 }
@@ -180,30 +173,37 @@ describe("motor de exportación ZIP", () => {
     });
 
     const reopened = await JSZip.loadAsync(zipBytes);
-    const audioPath =
-      `${EXPORT_ROOT_FOLDER}/01_Audios_con_capturas/` +
-      `Grupo Á/${audioName}`;
-    const associatedCapturePath =
-      `${EXPORT_ROOT_FOLDER}/01_Audios_con_capturas/` +
-      `Grupo Á/${captureName}`;
-    const orphanCapturePath =
-      `${EXPORT_ROOT_FOLDER}/02_Capturas_sin_audio/` +
-      `Sólo texto/${orphanCaptureName}`;
+    const audioPath = `01_Audios_con_capturas/Grupo Á/${audioName}`;
+    const associatedCapturePath = `01_Audios_con_capturas/Grupo Á/${captureName}`;
+    const orphanCapturePath = `02_Capturas_sin_audio/Sólo texto/${orphanCaptureName}`;
 
-    expect(Object.keys(reopened.files)).toEqual(
-      expect.arrayContaining([
-        `${EXPORT_ROOT_FOLDER}/`,
-        `${EXPORT_ROOT_FOLDER}/01_Audios_con_capturas/`,
-        `${EXPORT_ROOT_FOLDER}/02_Capturas_sin_audio/`,
+    expect(Object.keys(reopened.files).sort()).toEqual(
+      [
+        "01_Audios_con_capturas/",
+        "01_Audios_con_capturas/Grupo Á/",
         audioPath,
         associatedCapturePath,
+        "02_Capturas_sin_audio/",
+        "02_Capturas_sin_audio/Sólo texto/",
         orphanCapturePath,
-        `${EXPORT_ROOT_FOLDER}/${MANIFEST_PDF_FILENAME}`,
-        `${EXPORT_ROOT_FOLDER}/${INVENTORY_CSV_FILENAME}`,
-        `${EXPORT_ROOT_FOLDER}/${MANIFEST_TXT_FILENAME}`,
-        `${EXPORT_ROOT_FOLDER}/${FILING_TEXT_FILENAME}`,
-      ]),
+        MANIFEST_PDF_FILENAME,
+      ].sort(),
     );
+    const rootEntries = Object.keys(reopened.files).filter(
+      (path) => path.replace(/\/$/u, "").split("/").length === 1,
+    );
+    expect(rootEntries.sort()).toEqual(
+      [
+        "01_Audios_con_capturas/",
+        "02_Capturas_sin_audio/",
+        MANIFEST_PDF_FILENAME,
+      ].sort(),
+    );
+    expect(reopened.file(INVENTORY_CSV_FILENAME)).toBeNull();
+    expect(reopened.file(MANIFEST_TXT_FILENAME)).toBeNull();
+    expect(reopened.file(FILING_TEXT_FILENAME)).toBeNull();
+    expect(EVIDENCE_ZIP_FILENAME).toBe("EVIDENCIA_AUDIO_SHA256.zip");
+    expect(EVIDENCE_ZIP_FILENAME).not.toMatch(/prueba[-_ ]?digital/iu);
     expect(await reopened.file(audioPath)?.async("uint8array")).toEqual(
       audioBytes,
     );
@@ -240,7 +240,7 @@ describe("motor de exportación ZIP", () => {
 });
 
 describe("salidas de texto", () => {
-  it("genera CSV UTF-8 con BOM y TXT con todos los campos y hash completo", async () => {
+  it("genera CSV UTF-8 y TXT neutrales con los datos probatorios necesarios", async () => {
     const audio = await makeAudio({
       name: 'audio, "declaración" ñ.ogg',
       group: "G",
@@ -253,8 +253,10 @@ describe("salidas de texto", () => {
     const csv = generateInventoryCsv([audio]);
     expect(csv.codePointAt(0)).toBe(0xfeff);
     expect(csv).toContain('"audio, ""declaración"" ñ.ogg"');
-    expect(csv).toContain('"RIFF/WAVE PCM, 16 bits"');
     expect(csv).toContain(`"${audio.sha256}"`);
+    expect(csv).not.toContain("Tipo real detectado");
+    expect(csv).not.toContain("RIFF/WAVE");
+    expect(csv).not.toMatch(/prueba[- ]digital/iu);
     expect(csv.endsWith("\r\n")).toBe(true);
 
     const txt = generateManifestTxt([audio], {
@@ -267,16 +269,18 @@ describe("salidas de texto", () => {
       conclusion: "Cierre editable.",
     });
     expect(txt).toContain(`Nombre exacto: ${audio.name}`);
-    expect(txt).toContain(
-      "Grupo/captura asociada: G / 1-PHOTO-ñ.jpg",
-    );
+    expect(txt).toContain("Grupo/captura asociada: G / 1-PHOTO-ñ.jpg");
     expect(txt).toContain("Duración técnica: 00:58.283");
     expect(txt).toContain(`Tamaño: ${audio.byteLength} bytes`);
-    expect(txt).toContain("Tipo real detectado: RIFF/WAVE PCM, 16 bits");
     expect(txt).toContain("Extensión original: .ogg");
     expect(txt).toContain(`SHA-256: ${audio.sha256}`);
     expect(txt).toContain("Introducción editable.");
     expect(txt).toContain("Cierre editable.");
+    expect(txt).not.toContain("Tipo real detectado");
+    expect(txt).not.toContain("RIFF/WAVE");
+    expect(txt).not.toContain("Versión de la aplicación");
+    expect(txt).not.toContain("1.0.0");
+    expect(txt).not.toMatch(/prueba[- ]digital/iu);
   });
 
   it("coloca la URL del escrito sola en su propia línea", async () => {
@@ -293,13 +297,52 @@ describe("salidas de texto", () => {
     expect(text).not.toContain(`${url},`);
     expect(text).toContain(audio.name);
     expect(text).toContain(audio.sha256);
+    expect(text).not.toContain("Tipo real detectado");
+    expect(text).not.toContain("Versión de la aplicación");
+    expect(text).not.toMatch(/prueba[- ]digital/iu);
   });
 });
 
 describe("manifiesto PDF", () => {
+  it("omite marcas, metadatos de autoría, introducción y tipo detectado", async () => {
+    const audio = await makeAudio({
+      detectedType: "RIFF/WAVE PCM, 16 bits",
+    });
+    const introduction =
+      "INTRODUCCION_QUE_NO_DEBE_APARECER bajo datos generales.";
+    const pdfBytes = await generateManifestPdf([audio], {
+      calculationDate: "30/07/2026 18:45",
+      timeZone: "America/Argentina/Buenos_Aires",
+      appVersion: "1.0.0",
+      introduction,
+      conclusion: "Constancia final neutral.",
+    });
+    const pdf = await PDFDocument.load(pdfBytes, {
+      updateMetadata: false,
+    });
+    const decodedContent = decodedPdfContent(pdf);
+    const serialized = new TextDecoder("latin1").decode(pdfBytes);
+
+    expect(decodedContent).toContain(pdfHexString("DATOS GENERALES"));
+    expect(decodedContent).toContain(pdfHexString(audio.sha256));
+    expect(decodedContent).not.toContain(pdfHexString(introduction));
+    expect(decodedContent).not.toContain(pdfHexString("Tipo real detectado"));
+    expect(decodedContent).not.toContain(pdfHexString("RIFF/WAVE"));
+    expect(decodedContent).not.toContain(
+      pdfHexString("Versión de la aplicación"),
+    );
+    expect(decodedContent).not.toContain(pdfHexString("Prueba Digital"));
+    expect(decodedContent).not.toContain(pdfHexString("Prueba-Digital"));
+    expect(pdf.getCreator()).toBeUndefined();
+    expect(pdf.getProducer()).toBeUndefined();
+    expect(serialized).not.toMatch(/prueba[- ]digital/iu);
+    expect(serialized).not.toContain("/Creator");
+    expect(serialized).not.toContain("/Producer");
+  });
+
   it("mueve la constancia final completa si no cabe en la página actual", async () => {
     const audios: ExportAudio[] = [];
-    for (let index = 0; index < 3; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       const bytes = encoder.encode(`audio cierre ${index}`);
       audios.push(
         await makeAudio({
@@ -343,8 +386,7 @@ describe("manifiesto PDF", () => {
   it("repite un encabezado de continuación si la constancia ocupa varias páginas", async () => {
     const conclusion = Array.from(
       { length: 70 },
-      (_, index) =>
-        `LINEA_CIERRE_${String(index + 1).padStart(3, "0")}`,
+      (_, index) => `LINEA_CIERRE_${String(index + 1).padStart(3, "0")}`,
     ).join("\n");
 
     const pdfBytes = await generateManifestPdf([], {
@@ -413,7 +455,11 @@ describe("manifiesto PDF", () => {
     for (const audio of audios) {
       expect(decodedContent).toContain(pdfHexString(audio.sha256));
     }
-    for (let pageNumber = 1; pageNumber <= pdf.getPageCount(); pageNumber += 1) {
+    for (
+      let pageNumber = 1;
+      pageNumber <= pdf.getPageCount();
+      pageNumber += 1
+    ) {
       expect(decodedContent).toContain(
         `50E167696E6120${pdfHexString(
           `${pageNumber} de ${pdf.getPageCount()}`,

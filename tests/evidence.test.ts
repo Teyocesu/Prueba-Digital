@@ -14,11 +14,7 @@ import {
   verifySha256,
 } from "../lib/evidence";
 
-function writeAscii(
-  target: Uint8Array,
-  offset: number,
-  text: string,
-): void {
+function writeAscii(target: Uint8Array, offset: number, text: string): void {
   for (let index = 0; index < text.length; index += 1) {
     target[offset + index] = text.charCodeAt(index);
   }
@@ -74,6 +70,19 @@ function makeJpeg(): Uint8Array {
   return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]);
 }
 
+function makeFolderFile(
+  contents: Uint8Array,
+  name: string,
+  webkitRelativePath: string,
+): File {
+  const file = new File([standaloneBuffer(contents)], name);
+  Object.defineProperty(file, "webkitRelativePath", {
+    configurable: true,
+    value: webkitRelativePath,
+  });
+  return file;
+}
+
 describe("detección por contenido", () => {
   it.each([
     ["wav", makeWav(1)],
@@ -91,16 +100,13 @@ describe("detección por contenido", () => {
     [
       "m4a",
       new Uint8Array([
-        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20,
-        0, 0, 0, 0, 0x69, 0x73, 0x6f, 0x6d,
+        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0, 0, 0, 0,
+        0x69, 0x73, 0x6f, 0x6d,
       ]),
     ],
     ["aac", new Uint8Array([0xff, 0xf1, 0x50, 0x80])],
     ["jpeg", makeJpeg()],
-    [
-      "png",
-      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
-    ],
+    ["png", new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])],
     [
       "webp",
       new Uint8Array([
@@ -110,8 +116,8 @@ describe("detección por contenido", () => {
     [
       "heic",
       new Uint8Array([
-        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63,
-        0, 0, 0, 0, 0x6d, 0x69, 0x66, 0x31,
+        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0,
+        0x6d, 0x69, 0x66, 0x31,
       ]),
     ],
   ] as const)("detecta %s por magic bytes", (expected, bytes) => {
@@ -163,25 +169,24 @@ describe("nombres y basura de macOS", () => {
     "__MACOSX/A/audio.ogg",
     "A/__MACOSX/audio.ogg",
     "A/._audio.ogg",
+    ".carpeta-oculta/audio.ogg",
+    "Raíz/.temporal/captura.jpg",
+    "Raíz/.captura.jpg",
   ])("ignora %s", (path) => {
     expect(isMacOSJunk(path)).toBe(true);
   });
 
   it("preserva espacios, Unicode y errores aparentes del nombre", () => {
-    const decomposedName =
-      "1HOTO Cafe\u0301 con espacios y ñ 2026-07-21.jpg";
+    const decomposedName = "1HOTO Cafe\u0301 con espacios y ñ 2026-07-21.jpg";
     expect(safeBasename(`Grupo Á/${decomposedName}`)).toBe(decomposedName);
-    expect(
-      Array.from(safeBasename(`Grupo Á/${decomposedName}`)),
-    ).toEqual(Array.from(decomposedName));
+    expect(Array.from(safeBasename(`Grupo Á/${decomposedName}`))).toEqual(
+      Array.from(decomposedName),
+    );
   });
 
   it("preserva una barra invertida literal en un nombre de macOS", async () => {
     const exactName = "evidencia\\original.wav";
-    const file = new File(
-      [standaloneBuffer(makeWav(250))],
-      exactName,
-    );
+    const file = new File([standaloneBuffer(makeWav(250))], exactName);
     const loaded = await loadEvidenceFiles([file]);
 
     expect(safeBasename(exactName)).toBe(exactName);
@@ -194,10 +199,7 @@ describe("nombres y basura de macOS", () => {
     zip.file("__MACOSX/._Audio.wav", new Uint8Array([1]));
     zip.file(".DS_Store", new Uint8Array([1]));
     zip.file("Carpeta/._Audio.wav", new Uint8Array([1]));
-    zip.file(
-      "Carpeta/Audio con ñ.wav",
-      standaloneBuffer(makeWav(2_000, true)),
-    );
+    zip.file("Carpeta/Audio con ñ.wav", standaloneBuffer(makeWav(2_000, true)));
     zip.file("Carpeta/1HOTO única.jpg", standaloneBuffer(makeJpeg()));
     const zipBytes = await zip.generateAsync({ type: "uint8array" });
     const zipFile = new File(
@@ -246,6 +248,92 @@ describe("nombres y basura de macOS", () => {
     );
     expect(loaded.groups[1].audios[0].associatedCaptureId).toBe(
       loaded.groups[1].images[0].id,
+    );
+  });
+
+  it("conserva la estructura de webkitRelativePath sin la carpeta raíz común", async () => {
+    const audioA = makeFolderFile(
+      makeWav(400),
+      "Audio A.wav",
+      "Carpeta contenedora/A/Conversación/Audio A.wav",
+    );
+    const captureA = makeFolderFile(
+      makeJpeg(),
+      "Captura A.jpg",
+      "Carpeta contenedora/A/Conversación/Captura A.jpg",
+    );
+    const audioD = makeFolderFile(
+      makeWav(500),
+      "Audio D.wav",
+      "Carpeta contenedora/D/Audio D.wav",
+    );
+    const dsStore = makeFolderFile(
+      new Uint8Array([1]),
+      ".DS_Store",
+      "Carpeta contenedora/.DS_Store",
+    );
+    const resourceFork = makeFolderFile(
+      new Uint8Array([1]),
+      "._Audio A.wav",
+      "Carpeta contenedora/A/Conversación/._Audio A.wav",
+    );
+    const hiddenAudio = makeFolderFile(
+      makeWav(600),
+      "secreto.wav",
+      "Carpeta contenedora/.oculta/secreto.wav",
+    );
+
+    const loaded = await loadEvidenceFiles([
+      audioA,
+      captureA,
+      audioD,
+      dsStore,
+      resourceFork,
+      hiddenAudio,
+    ]);
+
+    expect(loaded.groups.map((group) => group.name)).toEqual(["A", "D"]);
+    expect(loaded.files.map((file) => file.path)).toEqual([
+      "A/Conversación/Audio A.wav",
+      "A/Conversación/Captura A.jpg",
+      "D/Audio D.wav",
+    ]);
+    expect(loaded.files.every((file) => file.source === "folder")).toBe(true);
+    expect(loaded.groups[0].audios[0].associatedCaptureId).toBe(
+      loaded.groups[0].images[0].id,
+    );
+    expect(audioA.webkitRelativePath).toBe(
+      "Carpeta contenedora/A/Conversación/Audio A.wav",
+    );
+    expect(loaded.ignored).toEqual([
+      "Carpeta contenedora/.DS_Store",
+      "Carpeta contenedora/A/Conversación/._Audio A.wav",
+      "Carpeta contenedora/.oculta/secreto.wav",
+    ]);
+  });
+
+  it("mantiene el nombre de la carpeta elegida como grupo si no hay subcarpetas", async () => {
+    const audio = makeFolderFile(
+      makeWav(300),
+      "Audio.wav",
+      "Material de audiencia/Audio.wav",
+    );
+    const capture = makeFolderFile(
+      makeJpeg(),
+      "Captura.jpg",
+      "Material de audiencia/Captura.jpg",
+    );
+
+    const loaded = await loadEvidenceFiles([audio, capture]);
+
+    expect(loaded.groups).toHaveLength(1);
+    expect(loaded.groups[0].name).toBe("Material de audiencia");
+    expect(loaded.files.map((file) => file.path)).toEqual([
+      "Audio.wav",
+      "Captura.jpg",
+    ]);
+    expect(loaded.groups[0].audios[0].associatedCaptureId).toBe(
+      loaded.groups[0].images[0].id,
     );
   });
 });
@@ -307,10 +395,7 @@ describe("seguridad ZIP", () => {
       compression: "DEFLATE",
       compressionOptions: { level: 9 },
     });
-    const suspicious = new File(
-      [standaloneBuffer(bytes)],
-      "sospechoso.zip",
-    );
+    const suspicious = new File([standaloneBuffer(bytes)], "sospechoso.zip");
     const suspiciousResult = await loadEvidenceFiles([suspicious], {
       limits: { maxCompressionRatio: 2 },
     });
@@ -393,9 +478,7 @@ describe("seguridad ZIP", () => {
     );
 
     expect(result.files).toHaveLength(0);
-    expect(result.rejected[0].reason).toContain(
-      "más que el tamaño declarado",
-    );
+    expect(result.rejected[0].reason).toContain("más que el tamaño declarado");
   });
 
   it("cuenta entradas centrales aunque JSZip colapse nombres duplicados", async () => {

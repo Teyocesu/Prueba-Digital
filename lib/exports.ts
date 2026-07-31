@@ -9,13 +9,12 @@ import {
   rgb,
 } from "pdf-lib";
 
-export const EXPORT_ROOT_FOLDER =
-  "PRUEBA_DIGITAL_AUDIOS_WHATSAPP_SHA256";
+/** Nombre neutro sugerido para descargar el paquete destinado a Drive. */
+export const EVIDENCE_ZIP_FILENAME = "EVIDENCIA_AUDIO_SHA256.zip";
 export const MANIFEST_PDF_FILENAME = "MANIFIESTO_SHA256_AUDIOS.pdf";
 export const INVENTORY_CSV_FILENAME = "INVENTARIO_AUDIOS_SHA256.csv";
 export const MANIFEST_TXT_FILENAME = "MANIFIESTO_SHA256_AUDIOS.txt";
-export const FILING_TEXT_FILENAME =
-  "TEXTO_PARA_INCORPORAR_AL_ESCRITO.txt";
+export const FILING_TEXT_FILENAME = "TEXTO_PARA_INCORPORAR_AL_ESCRITO.txt";
 
 export type ExportBinary = Uint8Array | ArrayBuffer | Blob;
 
@@ -124,7 +123,7 @@ export class EvidenceIntegrityError extends Error {
 const DEFAULT_TITLE =
   "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO";
 
-const DEFAULT_INTRODUCTION =
+const DEFAULT_MANIFEST_TEXT_INTRODUCTION =
   "Se deja expresa constancia de que los valores hash SHA-256 consignados a continuación fueron calculados por esta parte respecto de cada uno de los archivos de audio individualizados, con anterioridad a su carga en el enlace público de solo lectura denunciado en autos.\n\nCada valor hash corresponde al contenido exacto del respectivo archivo y permite verificar posteriormente su integridad y detectar cualquier eventual modificación, sustitución, conversión o alteración.";
 
 const DEFAULT_CONCLUSION =
@@ -362,17 +361,11 @@ function makeAudioSectionLines(
     `Grupo/captura asociada: ${captureDescription(audio)}`,
     `Duración técnica: ${audio.duration}`,
     `Tamaño: ${audio.byteLength} bytes`,
-    `Tipo real detectado: ${audio.detectedType}`,
     `Extensión original: ${audio.originalExtension}`,
   ];
 
   for (const field of fields) {
-    for (const wrappedLine of wrapText(
-      field,
-      fonts.regular,
-      9.2,
-      maxWidth,
-    )) {
+    for (const wrappedLine of wrapText(field, fonts.regular, 9.2, maxWidth)) {
       lines.push({
         text: wrappedLine,
         font: fonts.regular,
@@ -408,7 +401,9 @@ export async function generateManifestPdf(
   audios: readonly ExportAudio[],
   settings: ManifestSettings,
 ): Promise<Uint8Array> {
-  const pdf = await PDFDocument.create();
+  // Desactiva los metadatos automáticos de pdf-lib para que el documento no
+  // identifique la herramienta o aplicación con la que fue preparado.
+  const pdf = await PDFDocument.create({ updateMetadata: false });
   const regular = await pdf.embedFont(StandardFonts.Helvetica);
   const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const mono = await pdf.embedFont(StandardFonts.Courier);
@@ -418,14 +413,6 @@ export async function generateManifestPdf(
   pdf.setTitle(toWinAnsiSafe(title, regular));
   pdf.setSubject(
     "Individualización de archivos de audio y valores hash SHA-256",
-  );
-  pdf.setCreator(
-    toWinAnsiSafe(
-      settings.appVersion
-        ? `Aplicación de preparación de prueba digital ${settings.appVersion}`
-        : "Aplicación de preparación de prueba digital",
-      regular,
-    ),
   );
 
   let page = pdf.addPage(PageSizes.A4);
@@ -455,12 +442,7 @@ export async function generateManifestPdf(
     },
   ): void => {
     const indent = options?.indent ?? 0;
-    const lines = wrapText(
-      text,
-      font,
-      size,
-      PAGE_TEXT_WIDTH - indent,
-    );
+    const lines = wrapText(text, font, size, PAGE_TEXT_WIDTH - indent);
     for (const line of lines) {
       if (y - lineHeight < PAGE_CONTENT_BOTTOM) {
         addPage();
@@ -515,9 +497,6 @@ export async function generateManifestPdf(
     settings.observations?.trim()
       ? `Observaciones: ${settings.observations}`
       : undefined,
-    settings.appVersion?.trim()
-      ? `Versión de la aplicación: ${settings.appVersion}`
-      : undefined,
     settings.publicUrl?.trim()
       ? `Enlace público de solo lectura: ${settings.publicUrl.trim()}`
       : undefined,
@@ -526,14 +505,6 @@ export async function generateManifestPdf(
     drawFlowingText(field, regular, 9.5, 12.5);
   }
   y -= 10;
-
-  drawFlowingText(
-    settings.introduction?.trim() || DEFAULT_INTRODUCTION,
-    regular,
-    9.5,
-    13.2,
-    { after: 12 },
-  );
 
   if (audios.length === 0) {
     drawFlowingText(
@@ -553,9 +524,7 @@ export async function generateManifestPdf(
       PAGE_TEXT_WIDTH - 22,
     );
     const sectionHeight =
-      13 +
-      sectionLines.reduce((sum, line) => sum + line.lineHeight, 0) +
-      8;
+      13 + sectionLines.reduce((sum, line) => sum + line.lineHeight, 0) + 8;
     ensureSpace(sectionHeight + 10);
 
     const top = y;
@@ -585,8 +554,7 @@ export async function generateManifestPdf(
 
   const finalHeadingLineHeight = 14;
   const finalHeadingAfter = 4;
-  const finalHeadingHeight =
-    finalHeadingLineHeight + finalHeadingAfter;
+  const finalHeadingHeight = finalHeadingLineHeight + finalHeadingAfter;
   const finalBodyLineHeight = 13.2;
   const finalBodyLines = wrapText(
     settings.conclusion?.trim() || DEFAULT_CONCLUSION,
@@ -595,15 +563,12 @@ export async function generateManifestPdf(
     PAGE_TEXT_WIDTH,
   );
   const fullFinalSectionHeight =
-    finalHeadingHeight +
-    finalBodyLines.length * finalBodyLineHeight;
+    finalHeadingHeight + finalBodyLines.length * finalBodyLineHeight;
   const freshPageCapacity = PAGE_TOP - PAGE_CONTENT_BOTTOM;
 
   const drawFinalHeading = (continuation: boolean): void => {
     page.drawText(
-      continuation
-        ? "CONSTANCIA FINAL (continuación)"
-        : "CONSTANCIA FINAL",
+      continuation ? "CONSTANCIA FINAL (continuación)" : "CONSTANCIA FINAL",
       {
         x: PAGE_MARGIN_X,
         y,
@@ -615,9 +580,7 @@ export async function generateManifestPdf(
     y -= finalHeadingHeight;
   };
 
-  const drawFinalBodyLines = (
-    lines: readonly string[],
-  ): void => {
+  const drawFinalBodyLines = (lines: readonly string[]): void => {
     for (const line of lines) {
       if (line.length > 0) {
         page.drawText(line, {
@@ -643,15 +606,11 @@ export async function generateManifestPdf(
     // página siguiente repite un encabezado explícito de continuación.
     let firstBodyLine = 0;
     let continuation = false;
-    const minimumBodyLinesWithHeading = Math.min(
-      3,
-      finalBodyLines.length,
-    );
+    const minimumBodyLinesWithHeading = Math.min(3, finalBodyLines.length);
 
     while (firstBodyLine < finalBodyLines.length) {
       const minimumBlockHeight =
-        finalHeadingHeight +
-        minimumBodyLinesWithHeading * finalBodyLineHeight;
+        finalHeadingHeight + minimumBodyLinesWithHeading * finalBodyLineHeight;
       if (y - minimumBlockHeight < PAGE_CONTENT_BOTTOM) {
         addPage();
       }
@@ -660,18 +619,11 @@ export async function generateManifestPdf(
 
       const availableBodyLines = Math.max(
         1,
-        Math.floor(
-          (y - PAGE_CONTENT_BOTTOM) / finalBodyLineHeight,
-        ),
+        Math.floor((y - PAGE_CONTENT_BOTTOM) / finalBodyLineHeight),
       );
-      const remainingBodyLines =
-        finalBodyLines.length - firstBodyLine;
-      let linesOnThisPage = Math.min(
-        availableBodyLines,
-        remainingBodyLines,
-      );
-      const linesOnNextPage =
-        remainingBodyLines - linesOnThisPage;
+      const remainingBodyLines = finalBodyLines.length - firstBodyLine;
+      let linesOnThisPage = Math.min(availableBodyLines, remainingBodyLines);
+      const linesOnNextPage = remainingBodyLines - linesOnThisPage;
 
       // Si el corte dejaría una sola línea en la página siguiente, se
       // traslada también la línea anterior para conservar un cierre legible.
@@ -680,10 +632,7 @@ export async function generateManifestPdf(
       }
 
       drawFinalBodyLines(
-        finalBodyLines.slice(
-          firstBodyLine,
-          firstBodyLine + linesOnThisPage,
-        ),
+        finalBodyLines.slice(firstBodyLine, firstBodyLine + linesOnThisPage),
       );
       firstBodyLine += linesOnThisPage;
 
@@ -722,9 +671,7 @@ function csvCell(value: string | number): string {
   return `"${text.replace(/"/gu, '""')}"`;
 }
 
-export function generateInventoryCsv(
-  audios: readonly ExportAudio[],
-): string {
+export function generateInventoryCsv(audios: readonly ExportAudio[]): string {
   const headers = [
     "Número",
     "Nombre exacto",
@@ -732,7 +679,6 @@ export function generateInventoryCsv(
     "Captura(s) asociada(s)",
     "Duración técnica",
     "Tamaño en bytes",
-    "Tipo real detectado",
     "Extensión original",
     "SHA-256",
   ];
@@ -743,7 +689,6 @@ export function generateInventoryCsv(
     (audio.captureNames ?? []).join(" | "),
     audio.duration,
     audio.byteLength,
-    audio.detectedType,
     audio.originalExtension,
     normalizeHash(audio.sha256),
   ]);
@@ -763,9 +708,6 @@ function manifestGeneralLines(settings: ManifestSettings): string[] {
     settings.observations?.trim()
       ? `Observaciones: ${settings.observations}`
       : undefined,
-    settings.appVersion?.trim()
-      ? `Versión de la aplicación: ${settings.appVersion}`
-      : undefined,
     settings.publicUrl?.trim()
       ? `Enlace público de solo lectura: ${settings.publicUrl.trim()}`
       : undefined,
@@ -784,7 +726,6 @@ export function generateManifestTxt(
       `Grupo/captura asociada: ${captureDescription(audio)}`,
       `Duración técnica: ${audio.duration}`,
       `Tamaño: ${audio.byteLength} bytes`,
-      `Tipo real detectado: ${audio.detectedType}`,
       `Extensión original: ${audio.originalExtension}`,
       `SHA-256: ${normalizeHash(audio.sha256)}`,
     ].join("\n"),
@@ -796,7 +737,7 @@ export function generateManifestTxt(
     "",
     ...manifestGeneralLines(settings),
     "",
-    settings.introduction?.trim() || DEFAULT_INTRODUCTION,
+    settings.introduction?.trim() || DEFAULT_MANIFEST_TEXT_INTRODUCTION,
     "",
     ...(sections.length > 0
       ? sections.flatMap((section) => [section, ""])
@@ -842,7 +783,7 @@ interface MaterializedAudio {
 }
 
 function audioZipPath(audio: Pick<ExportAudio, "group" | "name">): string {
-  return `${EXPORT_ROOT_FOLDER}/01_Audios_con_capturas/${audio.group}/${audio.name}`;
+  return `01_Audios_con_capturas/${audio.group}/${audio.name}`;
 }
 
 function captureZipPath(
@@ -852,7 +793,7 @@ function captureZipPath(
   const area = audioGroups.has(capture.group)
     ? "01_Audios_con_capturas"
     : "02_Capturas_sin_audio";
-  return `${EXPORT_ROOT_FOLDER}/${area}/${capture.group}/${capture.name}`;
+  return `${area}/${capture.group}/${capture.name}`;
 }
 
 function registerUniquePath(paths: Set<string>, path: string): void {
@@ -896,9 +837,8 @@ export async function generateEvidenceZip(
   const registeredPaths = new Set<string>();
   const materializedAudios: MaterializedAudio[] = [];
 
-  zip.folder(EXPORT_ROOT_FOLDER);
-  zip.folder(`${EXPORT_ROOT_FOLDER}/01_Audios_con_capturas`);
-  zip.folder(`${EXPORT_ROOT_FOLDER}/02_Capturas_sin_audio`);
+  zip.folder("01_Audios_con_capturas");
+  zip.folder("02_Capturas_sin_audio");
 
   for (const audio of options.audios) {
     assertSafePathSegment(audio.group, "El grupo del audio");
@@ -932,24 +872,9 @@ export async function generateEvidenceZip(
     });
   }
 
-  const manifestPath = `${EXPORT_ROOT_FOLDER}/${MANIFEST_PDF_FILENAME}`;
+  const manifestPath = MANIFEST_PDF_FILENAME;
   registerUniquePath(registeredPaths, manifestPath);
   await addOptionalFile(zip, manifestPath, options.manifestPdf);
-  await addOptionalFile(
-    zip,
-    `${EXPORT_ROOT_FOLDER}/${INVENTORY_CSV_FILENAME}`,
-    options.inventoryCsv,
-  );
-  await addOptionalFile(
-    zip,
-    `${EXPORT_ROOT_FOLDER}/${MANIFEST_TXT_FILENAME}`,
-    options.manifestTxt,
-  );
-  await addOptionalFile(
-    zip,
-    `${EXPORT_ROOT_FOLDER}/${FILING_TEXT_FILENAME}`,
-    options.filingText,
-  );
 
   const zipBytes = await zip.generateAsync({
     type: "uint8array",
