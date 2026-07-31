@@ -4,6 +4,8 @@ Aplicación web en español para organizar audios y capturas de WhatsApp,
 calcular sus huellas SHA-256 y preparar un paquete documental para una
 presentación judicial.
 
+Sitio público: [prueba-digital.onrender.com](https://prueba-digital.onrender.com)
+
 Todo el procesamiento ocurre en el navegador. Los archivos no se envían a un
 servidor, no se guardan en una base de datos y no se convierten ni recomprimen.
 
@@ -59,9 +61,11 @@ archivos.
 
 ## Despliegue
 
-El proyecto puede publicarse como sitio estático en Render mediante
-[`render.yaml`](./render.yaml). El mismo código también incluye la configuración
-de OpenAI Sites en [`.openai/hosting.json`](./.openai/hosting.json).
+El proyecto se publica como sitio estático en Render mediante
+[`render.yaml`](./render.yaml). Cada avance validado que se incorpora a `main`
+activa automáticamente un nuevo despliegue. El mismo código también incluye la
+configuración de OpenAI Sites en
+[`.openai/hosting.json`](./.openai/hosting.json).
 
 No se requieren variables de entorno, almacenamiento, cuentas ni servicios de
 backend.

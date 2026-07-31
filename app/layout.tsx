@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 const publicOrigin =
   process.env.NEXT_PUBLIC_SITE_URL ??
   process.env.RENDER_EXTERNAL_URL ??
-  "https://prueba-digital-judicial.vnmiqueas.chatgpt.site";
+  "https://prueba-digital.onrender.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(publicOrigin),
