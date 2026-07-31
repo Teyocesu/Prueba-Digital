@@ -13,13 +13,18 @@ const geistMono = Geist_Mono({
 });
 
 const publicOrigin =
-  process.env.NEXT_PUBLIC_SITE_URL ?? process.env.RENDER_EXTERNAL_URL;
+  process.env.NEXT_PUBLIC_SITE_URL ??
+  process.env.RENDER_EXTERNAL_URL ??
+  "https://prueba-digital-judicial.vnmiqueas.chatgpt.site";
 
 export const metadata: Metadata = {
-  metadataBase: publicOrigin ? new URL(publicOrigin) : undefined,
+  metadataBase: new URL(publicOrigin),
   title: "Prueba Digital | Hash SHA-256 y manifiesto judicial",
   description:
     "Prepará archivos de audio y capturas para una presentación judicial, con procesamiento local y verificación SHA-256.",
+  alternates: {
+    canonical: "/",
+  },
   icons: {
     icon: "/favicon.png",
     shortcut: "/favicon.png",
@@ -35,6 +40,7 @@ export const metadata: Metadata = {
   openGraph: {
     type: "website",
     locale: "es_AR",
+    url: "/",
     title: "Prueba Digital | Hash SHA-256 y manifiesto judicial",
     description:
       "Organizá audios y capturas, calculá SHA-256 y generá un paquete judicial sin subir tus archivos.",
