@@ -17,8 +17,9 @@ export const MANIFEST_TXT_FILENAME = "MANIFIESTO_SHA256_AUDIOS.txt";
 export const FILING_TEXT_FILENAME = "TEXTO_PARA_INCORPORAR_AL_ESCRITO.txt";
 
 export type ExportBinary = Uint8Array | ArrayBuffer | Blob;
+export type ExportMediaKind = "audio" | "video";
 
-export interface ExportAudio {
+interface ExportMediaBase {
   /** Nombre original exacto, incluida su extensión. */
   name: string;
   /** Carpeta o ZIP superior del que provino el archivo. */
@@ -37,6 +38,32 @@ export interface ExportAudio {
   sha256: string;
   /** Nombres originales exactos de las capturas asociadas. */
   captureNames?: readonly string[];
+}
+
+export interface ExportMedia extends ExportMediaBase {
+  /** Clase probatoria del archivo. Nunca se infiere de `detectedType`. */
+  kind: ExportMediaKind;
+}
+
+/**
+ * Compatibilidad con el contrato original. La ausencia de `kind` representa
+ * audio, de modo que las integraciones existentes mantienen su salida exacta.
+ */
+export type ExportAudio = ExportMediaBase & { kind?: "audio" };
+
+export type ExportableMedia = ExportMedia | ExportAudio;
+
+export type EvidenceComposition = "audio" | "video" | "mixed";
+
+export interface EvidenceExportNaming {
+  composition: EvidenceComposition;
+  zipFilename: string;
+  pdfFilename: string;
+  csvFilename: string;
+  txtFilename: string;
+  primaryFolder: string;
+  secondaryFolder: string;
+  title: string;
 }
 
 export interface ExportCapture {
@@ -60,6 +87,7 @@ export interface ManifestSettings {
 export interface IntegrityEntry {
   path: string;
   name: string;
+  kind: ExportMediaKind;
   expectedSha256: string;
   actualSha256: string;
   byteLength: number;
@@ -68,14 +96,20 @@ export interface IntegrityEntry {
 
 export interface ZipIntegrityReport {
   ok: boolean;
+  mediaCount: number;
   audioCount: number;
+  videoCount: number;
   entries: IntegrityEntry[];
 }
 
 export interface GenerateEvidenceZipOptions {
-  audios: readonly ExportAudio[];
+  /** Contrato principal para audio, video o una combinación de ambos. */
+  media?: readonly ExportableMedia[];
+  /** @deprecated Usar `media`. Se conserva para integraciones audio-only. */
+  audios?: readonly ExportAudio[];
   captures?: readonly ExportCapture[];
   manifestPdf: ExportBinary;
+  naming?: EvidenceExportNaming;
   inventoryCsv?: string | ExportBinary;
   manifestTxt?: string | ExportBinary;
   filingText?: string | ExportBinary;
@@ -84,10 +118,13 @@ export interface GenerateEvidenceZipOptions {
 export interface GenerateEvidenceZipResult {
   zipBytes: Uint8Array;
   integrityReport: ZipIntegrityReport;
+  naming: EvidenceExportNaming;
 }
 
 export interface BuildEvidencePackageOptions {
-  audios: readonly ExportAudio[];
+  media?: readonly ExportableMedia[];
+  /** @deprecated Usar `media`. */
+  audios?: readonly ExportAudio[];
   captures?: readonly ExportCapture[];
   settings: ManifestSettings;
   includeCsv?: boolean;
@@ -120,11 +157,84 @@ export class EvidenceIntegrityError extends Error {
   }
 }
 
-const DEFAULT_TITLE =
-  "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO";
+const AUDIO_ONLY_NAMING: EvidenceExportNaming = {
+  composition: "audio",
+  zipFilename: EVIDENCE_ZIP_FILENAME,
+  pdfFilename: MANIFEST_PDF_FILENAME,
+  csvFilename: INVENTORY_CSV_FILENAME,
+  txtFilename: MANIFEST_TXT_FILENAME,
+  primaryFolder: "01_Audios_con_capturas",
+  secondaryFolder: "02_Capturas_sin_audio",
+  title: "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO",
+};
 
-const DEFAULT_MANIFEST_TEXT_INTRODUCTION =
-  "Se deja expresa constancia de que los valores hash SHA-256 consignados a continuación fueron calculados por esta parte respecto de cada uno de los archivos de audio individualizados, con anterioridad a su carga en el enlace público de solo lectura denunciado en autos.\n\nCada valor hash corresponde al contenido exacto del respectivo archivo y permite verificar posteriormente su integridad y detectar cualquier eventual modificación, sustitución, conversión o alteración.";
+const VIDEO_ONLY_NAMING: EvidenceExportNaming = {
+  composition: "video",
+  zipFilename: "EVIDENCIA_VIDEO_SHA256.zip",
+  pdfFilename: "MANIFIESTO_SHA256_VIDEOS.pdf",
+  csvFilename: "INVENTARIO_VIDEOS_SHA256.csv",
+  txtFilename: "MANIFIESTO_SHA256_VIDEOS.txt",
+  primaryFolder: "01_Videos_con_capturas",
+  secondaryFolder: "02_Capturas_sin_video",
+  title: "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE VIDEO",
+};
+
+const MIXED_MEDIA_NAMING: EvidenceExportNaming = {
+  composition: "mixed",
+  zipFilename: "EVIDENCIA_MULTIMEDIA_SHA256.zip",
+  pdfFilename: "MANIFIESTO_SHA256_MULTIMEDIA.pdf",
+  csvFilename: "INVENTARIO_MULTIMEDIA_SHA256.csv",
+  txtFilename: "MANIFIESTO_SHA256_MULTIMEDIA.txt",
+  primaryFolder: "01_Archivos_multimedia_con_capturas",
+  secondaryFolder: "02_Capturas_sin_multimedia",
+  title:
+    "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO Y VIDEO",
+};
+
+type MediaKindCarrier = { kind?: ExportMediaKind };
+
+function mediaKind(media: MediaKindCarrier): ExportMediaKind {
+  return media.kind ?? "audio";
+}
+
+export function evidenceNamingForMedia(
+  media: readonly MediaKindCarrier[],
+): EvidenceExportNaming {
+  const hasAudio = media.some((item) => mediaKind(item) === "audio");
+  const hasVideo = media.some((item) => mediaKind(item) === "video");
+  const naming = hasVideo
+    ? hasAudio
+      ? MIXED_MEDIA_NAMING
+      : VIDEO_ONLY_NAMING
+    : AUDIO_ONLY_NAMING;
+  return { ...naming };
+}
+
+function mediaKindLabel(media: ExportableMedia): "Audio" | "Video" {
+  return mediaKind(media) === "video" ? "Video" : "Audio";
+}
+
+function mediaNoun(
+  composition: EvidenceComposition,
+  options: { plural?: boolean } = {},
+): string {
+  const plural = options.plural ?? true;
+  if (composition === "video") {
+    return plural ? "archivos de video" : "archivo de video";
+  }
+  if (composition === "mixed") {
+    return plural ? "archivos de audio y video" : "archivo multimedia";
+  }
+  return plural ? "archivos de audio" : "archivo de audio";
+}
+
+function defaultManifestTextIntroduction(
+  naming: EvidenceExportNaming,
+): string {
+  return `Se deja expresa constancia de que los valores hash SHA-256 consignados a continuación fueron calculados por esta parte respecto de cada uno de los ${mediaNoun(
+    naming.composition,
+  )} individualizados, con anterioridad a su carga en el enlace público de solo lectura denunciado en autos.\n\nCada valor hash corresponde al contenido exacto del respectivo archivo y permite verificar posteriormente su integridad y detectar cualquier eventual modificación, sustitución, conversión o alteración.`;
+}
 
 const DEFAULT_CONCLUSION =
   "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original para su correspondiente examen técnico.";
@@ -325,14 +435,14 @@ function wrapText(
     .flatMap((line) => wrapSingleLine(line, font, size, maxWidth));
 }
 
-function captureDescription(audio: ExportAudio): string {
-  const captures = audio.captureNames ?? [];
+function captureDescription(media: ExportableMedia): string {
+  const captures = media.captureNames ?? [];
   return captures.length > 0
-    ? `${audio.group} / ${captures.join(", ")}`
-    : `${audio.group} / Sin captura asociada`;
+    ? `${media.group} / ${captures.join(", ")}`
+    : `${media.group} / Sin captura asociada`;
 }
 
-interface AudioSectionLine {
+interface MediaSectionLine {
   text: string;
   font: PDFFont;
   size: number;
@@ -340,13 +450,13 @@ interface AudioSectionLine {
   color?: ReturnType<typeof rgb> | ReturnType<typeof grayscale>;
 }
 
-function makeAudioSectionLines(
-  audio: ExportAudio,
+function makeMediaSectionLines(
+  media: ExportableMedia,
   position: number,
   fonts: { regular: PDFFont; bold: PDFFont; mono: PDFFont },
   maxWidth: number,
-): AudioSectionLine[] {
-  const lines: AudioSectionLine[] = [
+): MediaSectionLine[] {
+  const lines: MediaSectionLine[] = [
     {
       text: toWinAnsiSafe(`Archivo ${position}`, fonts.bold),
       font: fonts.bold,
@@ -357,11 +467,12 @@ function makeAudioSectionLines(
   ];
 
   const fields = [
-    `Nombre exacto: ${audio.name}`,
-    `Grupo/captura asociada: ${captureDescription(audio)}`,
-    `Duración técnica: ${audio.duration}`,
-    `Tamaño: ${audio.byteLength} bytes`,
-    `Extensión original: ${audio.originalExtension}`,
+    `Nombre exacto: ${media.name}`,
+    `Tipo de archivo: ${mediaKindLabel(media)}`,
+    `Grupo/captura asociada: ${captureDescription(media)}`,
+    `Duración técnica: ${media.duration}`,
+    `Tamaño: ${media.byteLength} bytes`,
+    `Extensión original: ${media.originalExtension}`,
   ];
 
   for (const field of fields) {
@@ -382,7 +493,7 @@ function makeAudioSectionLines(
     lineHeight: 12.2,
   });
   for (const hashLine of wrapText(
-    normalizeHash(audio.sha256),
+    normalizeHash(media.sha256),
     fonts.mono,
     8.3,
     maxWidth,
@@ -398,7 +509,7 @@ function makeAudioSectionLines(
 }
 
 export async function generateManifestPdf(
-  audios: readonly ExportAudio[],
+  media: readonly ExportableMedia[],
   settings: ManifestSettings,
 ): Promise<Uint8Array> {
   // Desactiva los metadatos automáticos de pdf-lib para que el documento no
@@ -409,10 +520,14 @@ export async function generateManifestPdf(
   const mono = await pdf.embedFont(StandardFonts.Courier);
   const fonts = { regular, bold, mono };
 
-  const title = settings.title?.trim() || DEFAULT_TITLE;
+  const naming = evidenceNamingForMedia(media);
+  const title = settings.title?.trim() || naming.title;
   pdf.setTitle(toWinAnsiSafe(title, regular));
   pdf.setSubject(
-    "Individualización de archivos de audio y valores hash SHA-256",
+    toWinAnsiSafe(
+      `Individualización de ${mediaNoun(naming.composition)} y valores hash SHA-256`,
+      regular,
+    ),
   );
 
   let page = pdf.addPage(PageSizes.A4);
@@ -506,9 +621,9 @@ export async function generateManifestPdf(
   }
   y -= 10;
 
-  if (audios.length === 0) {
+  if (media.length === 0) {
     drawFlowingText(
-      "No se incluyeron archivos de audio en este manifiesto.",
+      `No se incluyeron ${mediaNoun(naming.composition)} en este manifiesto.`,
       regular,
       9.5,
       13.2,
@@ -516,9 +631,9 @@ export async function generateManifestPdf(
     );
   }
 
-  for (let index = 0; index < audios.length; index += 1) {
-    const sectionLines = makeAudioSectionLines(
-      audios[index],
+  for (let index = 0; index < media.length; index += 1) {
+    const sectionLines = makeMediaSectionLines(
+      media[index],
       index + 1,
       fonts,
       PAGE_TEXT_WIDTH - 22,
@@ -671,10 +786,13 @@ function csvCell(value: string | number): string {
   return `"${text.replace(/"/gu, '""')}"`;
 }
 
-export function generateInventoryCsv(audios: readonly ExportAudio[]): string {
+export function generateInventoryCsv(
+  media: readonly ExportableMedia[],
+): string {
   const headers = [
     "Número",
     "Nombre exacto",
+    "Tipo de archivo",
     "Grupo",
     "Captura(s) asociada(s)",
     "Duración técnica",
@@ -682,15 +800,16 @@ export function generateInventoryCsv(audios: readonly ExportAudio[]): string {
     "Extensión original",
     "SHA-256",
   ];
-  const rows = audios.map((audio, index) => [
+  const rows = media.map((item, index) => [
     index + 1,
-    audio.name,
-    audio.group,
-    (audio.captureNames ?? []).join(" | "),
-    audio.duration,
-    audio.byteLength,
-    audio.originalExtension,
-    normalizeHash(audio.sha256),
+    item.name,
+    mediaKindLabel(item),
+    item.group,
+    (item.captureNames ?? []).join(" | "),
+    item.duration,
+    item.byteLength,
+    item.originalExtension,
+    normalizeHash(item.sha256),
   ]);
   return `\uFEFF${[headers, ...rows]
     .map((row) => row.map(csvCell).join(","))
@@ -715,19 +834,21 @@ function manifestGeneralLines(settings: ManifestSettings): string[] {
 }
 
 export function generateManifestTxt(
-  audios: readonly ExportAudio[],
+  media: readonly ExportableMedia[],
   settings: ManifestSettings,
 ): string {
-  const title = settings.title?.trim() || DEFAULT_TITLE;
-  const sections = audios.map((audio, index) =>
+  const naming = evidenceNamingForMedia(media);
+  const title = settings.title?.trim() || naming.title;
+  const sections = media.map((item, index) =>
     [
       `ARCHIVO ${index + 1}`,
-      `Nombre exacto: ${audio.name}`,
-      `Grupo/captura asociada: ${captureDescription(audio)}`,
-      `Duración técnica: ${audio.duration}`,
-      `Tamaño: ${audio.byteLength} bytes`,
-      `Extensión original: ${audio.originalExtension}`,
-      `SHA-256: ${normalizeHash(audio.sha256)}`,
+      `Nombre exacto: ${item.name}`,
+      `Tipo de archivo: ${mediaKindLabel(item)}`,
+      `Grupo/captura asociada: ${captureDescription(item)}`,
+      `Duración técnica: ${item.duration}`,
+      `Tamaño: ${item.byteLength} bytes`,
+      `Extensión original: ${item.originalExtension}`,
+      `SHA-256: ${normalizeHash(item.sha256)}`,
     ].join("\n"),
   );
 
@@ -737,11 +858,14 @@ export function generateManifestTxt(
     "",
     ...manifestGeneralLines(settings),
     "",
-    settings.introduction?.trim() || DEFAULT_MANIFEST_TEXT_INTRODUCTION,
+    settings.introduction?.trim() || defaultManifestTextIntroduction(naming),
     "",
     ...(sections.length > 0
       ? sections.flatMap((section) => [section, ""])
-      : ["No se incluyeron archivos de audio en este manifiesto.", ""]),
+      : [
+          `No se incluyeron ${mediaNoun(naming.composition)} en este manifiesto.`,
+          "",
+        ]),
     "CONSTANCIA FINAL",
     "",
     settings.conclusion?.trim() || DEFAULT_CONCLUSION,
@@ -750,49 +874,65 @@ export function generateManifestTxt(
 }
 
 export function generateFilingText(
-  audios: readonly ExportAudio[],
+  media: readonly ExportableMedia[],
   publicUrl?: string,
 ): string {
   const link = publicUrl?.trim() || "[ENLACE PÚBLICO DE SOLO LECTURA]";
-  const audioSections = audios.map((audio, index) =>
+  const naming = evidenceNamingForMedia(media);
+  const mediaSections = media.map((item, index) =>
     [
-      `Archivo ${index + 1}: “${audio.name}”`,
-      `SHA-256: ${normalizeHash(audio.sha256)}`,
+      `Archivo ${index + 1} (${mediaKindLabel(item)}): “${item.name}”`,
+      `SHA-256: ${normalizeHash(item.sha256)}`,
     ].join("\n"),
   );
+  const hasAssociatedCaptures = media.some(
+    (item) => (item.captureNames?.length ?? 0) > 0,
+  );
+  const materialDescription = `El material está integrado por los ${mediaNoun(
+    naming.composition,
+  )} individualizados a continuación${
+    hasAssociatedCaptures
+      ? " y las capturas de pantalla asociadas cuando corresponde"
+      : ""
+  }.`;
 
   return [
     "Se acompaña el material digital mediante enlace de acceso público de solo lectura disponible en:",
     link,
     "",
-    "El material está integrado por los archivos de audio de WhatsApp individualizados a continuación y sus respectivas capturas de pantalla.",
+    materialDescription,
     "",
     "Esta parte asume el compromiso de mantener disponibles y sin modificaciones, sustituciones ni eliminaciones los archivos alojados en el enlace denunciado durante la tramitación de las presentes actuaciones. Asimismo, pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original del cual proviene el material, para su examen técnico o análisis forense, en caso de considerarse necesario.",
     "",
-    ...audioSections.flatMap((section) => [section, ""]),
-    `Asimismo, dentro del enlace denunciado se encuentra incorporado el archivo denominado “${MANIFEST_PDF_FILENAME}”, en el que se individualizan los archivos, sus capturas asociadas, duración, tamaño y correspondiente valor hash SHA-256.`,
+    ...mediaSections.flatMap((section) => [section, ""]),
+    `Asimismo, dentro del enlace denunciado se encuentra incorporado el archivo denominado “${naming.pdfFilename}”, en el que se individualizan los archivos, las capturas asociadas cuando corresponde, la duración, el tamaño y el correspondiente valor hash SHA-256.`,
     "",
   ].join("\n");
 }
 
-interface MaterializedAudio {
-  audio: ExportAudio;
+interface MaterializedMedia {
+  media: ExportableMedia;
+  kind: ExportMediaKind;
   bytes: Uint8Array<ArrayBuffer>;
   path: string;
   expectedSha256: string;
 }
 
-function audioZipPath(audio: Pick<ExportAudio, "group" | "name">): string {
-  return `01_Audios_con_capturas/${audio.group}/${audio.name}`;
+function mediaZipPath(
+  media: Pick<ExportableMedia, "group" | "name">,
+  naming: EvidenceExportNaming,
+): string {
+  return `${naming.primaryFolder}/${media.group}/${media.name}`;
 }
 
 function captureZipPath(
   capture: Pick<ExportCapture, "group" | "name">,
-  audioGroups: ReadonlySet<string>,
+  mediaGroups: ReadonlySet<string>,
+  naming: EvidenceExportNaming,
 ): string {
-  const area = audioGroups.has(capture.group)
-    ? "01_Audios_con_capturas"
-    : "02_Capturas_sin_audio";
+  const area = mediaGroups.has(capture.group)
+    ? naming.primaryFolder
+    : naming.secondaryFolder;
   return `${area}/${capture.group}/${capture.name}`;
 }
 
@@ -832,24 +972,28 @@ export async function generateEvidenceZip(
   options: GenerateEvidenceZipOptions,
 ): Promise<GenerateEvidenceZipResult> {
   const zip = new JSZip();
+  const media = options.media ?? options.audios ?? [];
+  const naming = options.naming ?? evidenceNamingForMedia(media);
   const captures = options.captures ?? [];
-  const audioGroups = new Set(options.audios.map((audio) => audio.group));
+  const mediaGroups = new Set(media.map((item) => item.group));
   const registeredPaths = new Set<string>();
-  const materializedAudios: MaterializedAudio[] = [];
+  const materializedMedia: MaterializedMedia[] = [];
 
-  zip.folder("01_Audios_con_capturas");
-  zip.folder("02_Capturas_sin_audio");
+  zip.folder(naming.primaryFolder);
+  zip.folder(naming.secondaryFolder);
 
-  for (const audio of options.audios) {
-    assertSafePathSegment(audio.group, "El grupo del audio");
-    assertSafePathSegment(audio.name, "El nombre del audio");
-    const expectedSha256 = normalizeHash(audio.sha256);
-    const path = audioZipPath(audio);
+  for (const item of media) {
+    const kind = mediaKind(item);
+    const kindLabel = kind === "video" ? "video" : "audio";
+    assertSafePathSegment(item.group, `El grupo del ${kindLabel}`);
+    assertSafePathSegment(item.name, `El nombre del ${kindLabel}`);
+    const expectedSha256 = normalizeHash(item.sha256);
+    const path = mediaZipPath(item, naming);
     registerUniquePath(registeredPaths, path);
-    const bytes = await toOwnedBytes(audio.bytes);
-    if (bytes.byteLength !== audio.byteLength) {
+    const bytes = await toOwnedBytes(item.bytes);
+    if (bytes.byteLength !== item.byteLength) {
       throw new Error(
-        `El tamaño registrado de "${audio.name}" (${audio.byteLength} bytes) no coincide con sus bytes originales (${bytes.byteLength} bytes)`,
+        `El tamaño registrado de "${item.name}" (${item.byteLength} bytes) no coincide con sus bytes originales (${bytes.byteLength} bytes)`,
       );
     }
     zip.file(path, bytes, {
@@ -857,13 +1001,19 @@ export async function generateEvidenceZip(
       compression: "STORE",
       createFolders: true,
     });
-    materializedAudios.push({ audio, bytes, path, expectedSha256 });
+    materializedMedia.push({
+      media: item,
+      kind,
+      bytes,
+      path,
+      expectedSha256,
+    });
   }
 
   for (const capture of captures) {
     assertSafePathSegment(capture.group, "El grupo de la captura");
     assertSafePathSegment(capture.name, "El nombre de la captura");
-    const path = captureZipPath(capture, audioGroups);
+    const path = captureZipPath(capture, mediaGroups, naming);
     registerUniquePath(registeredPaths, path);
     zip.file(path, await toOwnedBytes(capture.bytes), {
       binary: true,
@@ -872,7 +1022,7 @@ export async function generateEvidenceZip(
     });
   }
 
-  const manifestPath = MANIFEST_PDF_FILENAME;
+  const manifestPath = naming.pdfFilename;
   registerUniquePath(registeredPaths, manifestPath);
   await addOptionalFile(zip, manifestPath, options.manifestPdf);
 
@@ -887,12 +1037,13 @@ export async function generateEvidenceZip(
   // resultado serializado y se calcula cada hash sobre la copia allí incluida.
   const reopened = await JSZip.loadAsync(zipBytes);
   const entries: IntegrityEntry[] = [];
-  for (const materialized of materializedAudios) {
+  for (const materialized of materializedMedia) {
     const entry = reopened.file(materialized.path);
     if (!entry) {
       entries.push({
         path: materialized.path,
-        name: materialized.audio.name,
+        name: materialized.media.name,
+        kind: materialized.kind,
         expectedSha256: materialized.expectedSha256,
         actualSha256: "",
         byteLength: 0,
@@ -904,7 +1055,8 @@ export async function generateEvidenceZip(
     const actualSha256 = await sha256Hex(copiedBytes);
     entries.push({
       path: materialized.path,
-      name: materialized.audio.name,
+      name: materialized.media.name,
+      kind: materialized.kind,
       expectedSha256: materialized.expectedSha256,
       actualSha256,
       byteLength: copiedBytes.byteLength,
@@ -916,36 +1068,38 @@ export async function generateEvidenceZip(
 
   const integrityReport: ZipIntegrityReport = {
     ok: entries.every((entry) => entry.matches),
-    audioCount: entries.length,
+    mediaCount: entries.length,
+    audioCount: entries.filter((entry) => entry.kind === "audio").length,
+    videoCount: entries.filter((entry) => entry.kind === "video").length,
     entries,
   };
   if (!integrityReport.ok) {
     throw new EvidenceIntegrityError(integrityReport);
   }
 
-  return { zipBytes, integrityReport };
+  return { zipBytes, integrityReport, naming };
 }
 
 export async function buildEvidencePackage(
   options: BuildEvidencePackageOptions,
 ): Promise<EvidencePackageResult> {
-  const manifestPdf = await generateManifestPdf(
-    options.audios,
-    options.settings,
-  );
+  const media = options.media ?? options.audios ?? [];
+  const naming = evidenceNamingForMedia(media);
+  const manifestPdf = await generateManifestPdf(media, options.settings);
   const inventoryCsv = options.includeCsv
-    ? generateInventoryCsv(options.audios)
+    ? generateInventoryCsv(media)
     : undefined;
   const manifestTxt = options.includeManifestTxt
-    ? generateManifestTxt(options.audios, options.settings)
+    ? generateManifestTxt(media, options.settings)
     : undefined;
   const filingText = options.includeFilingText
-    ? generateFilingText(options.audios, options.settings.publicUrl)
+    ? generateFilingText(media, options.settings.publicUrl)
     : undefined;
   const { zipBytes, integrityReport } = await generateEvidenceZip({
-    audios: options.audios,
+    media,
     captures: options.captures,
     manifestPdf,
+    naming,
     inventoryCsv,
     manifestTxt,
     filingText,
@@ -958,5 +1112,6 @@ export async function buildEvidencePackage(
     manifestTxt,
     filingText,
     integrityReport,
+    naming,
   };
 }

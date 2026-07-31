@@ -16,6 +16,8 @@ import {
   MANIFEST_PDF_FILENAME,
   MANIFEST_TXT_FILENAME,
   ExportAudio,
+  ExportMedia,
+  evidenceNamingForMedia,
   generateEvidenceZip,
   generateFilingText,
   generateInventoryCsv,
@@ -48,6 +50,33 @@ async function makeAudio(
     originalExtension: ".ogg",
     sha256: await sha256Hex(materialized),
     captureNames: ["captura original.jpg"],
+    ...overrides,
+  };
+}
+
+async function makeVideo(
+  overrides: Partial<ExportMedia> = {},
+): Promise<ExportMedia> {
+  const bytes =
+    overrides.bytes ??
+    Uint8Array.from([0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50]);
+  const materialized =
+    bytes instanceof Blob
+      ? new Uint8Array(await bytes.arrayBuffer())
+      : bytes instanceof ArrayBuffer
+        ? new Uint8Array(bytes)
+        : bytes;
+  return {
+    kind: "video",
+    name: "video original.mp4",
+    group: "V",
+    bytes,
+    duration: "00:12.500",
+    byteLength: materialized.byteLength,
+    detectedType: "video/mp4 (ISO Base Media)",
+    originalExtension: ".mp4",
+    sha256: await sha256Hex(materialized),
+    captureNames: ["captura video.jpg"],
     ...overrides,
   };
 }
@@ -112,6 +141,53 @@ function pdfHexString(value: string): string {
     .toUpperCase();
 }
 
+describe("nomenclatura según el material incluido", () => {
+  it("conserva exactamente la nomenclatura histórica para audio-only", async () => {
+    const audio = await makeAudio();
+
+    expect(evidenceNamingForMedia([audio])).toEqual({
+      composition: "audio",
+      zipFilename: "EVIDENCIA_AUDIO_SHA256.zip",
+      pdfFilename: "MANIFIESTO_SHA256_AUDIOS.pdf",
+      csvFilename: "INVENTARIO_AUDIOS_SHA256.csv",
+      txtFilename: "MANIFIESTO_SHA256_AUDIOS.txt",
+      primaryFolder: "01_Audios_con_capturas",
+      secondaryFolder: "02_Capturas_sin_audio",
+      title:
+        "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO",
+    });
+    expect(evidenceNamingForMedia([]).composition).toBe("audio");
+  });
+
+  it("resuelve nombres judiciales específicos para video-only y material mixto", async () => {
+    const audio = await makeAudio();
+    const video = await makeVideo();
+
+    expect(evidenceNamingForMedia([video])).toEqual({
+      composition: "video",
+      zipFilename: "EVIDENCIA_VIDEO_SHA256.zip",
+      pdfFilename: "MANIFIESTO_SHA256_VIDEOS.pdf",
+      csvFilename: "INVENTARIO_VIDEOS_SHA256.csv",
+      txtFilename: "MANIFIESTO_SHA256_VIDEOS.txt",
+      primaryFolder: "01_Videos_con_capturas",
+      secondaryFolder: "02_Capturas_sin_video",
+      title:
+        "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE VIDEO",
+    });
+    expect(evidenceNamingForMedia([audio, video])).toEqual({
+      composition: "mixed",
+      zipFilename: "EVIDENCIA_MULTIMEDIA_SHA256.zip",
+      pdfFilename: "MANIFIESTO_SHA256_MULTIMEDIA.pdf",
+      csvFilename: "INVENTARIO_MULTIMEDIA_SHA256.csv",
+      txtFilename: "MANIFIESTO_SHA256_MULTIMEDIA.txt",
+      primaryFolder: "01_Archivos_multimedia_con_capturas",
+      secondaryFolder: "02_Capturas_sin_multimedia",
+      title:
+        "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO Y VIDEO",
+    });
+  });
+});
+
 describe("motor de exportación ZIP", () => {
   it("preserva bytes, hashes, nombres Unicode y la estructura judicial", async () => {
     const audioBytes = Uint8Array.from([
@@ -138,7 +214,7 @@ describe("motor de exportación ZIP", () => {
       "https://drive.example.test/folder?id=á",
     );
 
-    const { zipBytes, integrityReport } = await generateEvidenceZip({
+    const { zipBytes, integrityReport, naming } = await generateEvidenceZip({
       audios: [audio],
       captures: [
         {
@@ -160,7 +236,9 @@ describe("motor de exportación ZIP", () => {
 
     expect(integrityReport).toEqual({
       ok: true,
+      mediaCount: 1,
       audioCount: 1,
+      videoCount: 0,
       entries: [
         expect.objectContaining({
           name: audioName,
@@ -171,6 +249,7 @@ describe("motor de exportación ZIP", () => {
         }),
       ],
     });
+    expect(naming).toEqual(evidenceNamingForMedia([audio]));
 
     const reopened = await JSZip.loadAsync(zipBytes);
     const audioPath = `01_Audios_con_capturas/Grupo Á/${audioName}`;
@@ -217,6 +296,177 @@ describe("motor de exportación ZIP", () => {
     const methods = centralDirectoryCompressionMethods(zipBytes);
     expect(methods.length).toBeGreaterThan(0);
     expect(new Set(methods)).toEqual(new Set([0]));
+  });
+
+  it("organiza y verifica byte por byte un paquete video-only", async () => {
+    const videoBytes = Uint8Array.from([
+      0, 0, 0, 24, 102, 116, 121, 112, 109, 112, 52, 50, 1, 2, 3, 255,
+    ]);
+    const video = await makeVideo({
+      name: "Video declaración ñ.mp4",
+      group: "Carpeta V",
+      bytes: videoBytes,
+      byteLength: videoBytes.byteLength,
+      sha256: await sha256Hex(videoBytes),
+      captureNames: ["Captura video.png"],
+    });
+    const manifestPdf = await generateManifestPdf([video], {
+      calculationDate: "31/07/2026 16:00",
+      introduction: "ESTE PARRAFO NO DEBE APARECER EN EL PDF",
+      conclusion: "Constancia final neutral.",
+    });
+
+    const { zipBytes, integrityReport, naming } = await generateEvidenceZip({
+      media: [video],
+      captures: [
+        {
+          name: "Captura video.png",
+          group: "Carpeta V",
+          bytes: Uint8Array.from([137, 80, 78, 71]),
+        },
+        {
+          name: "Captura sin video.jpg",
+          group: "Sólo capturas",
+          bytes: Uint8Array.from([255, 216, 255]),
+        },
+      ],
+      manifestPdf,
+    });
+
+    expect(naming).toEqual(evidenceNamingForMedia([video]));
+    expect(integrityReport).toMatchObject({
+      ok: true,
+      mediaCount: 1,
+      audioCount: 0,
+      videoCount: 1,
+    });
+    expect(integrityReport.entries[0]).toMatchObject({
+      kind: "video",
+      name: video.name,
+      expectedSha256: video.sha256,
+      actualSha256: video.sha256,
+      byteLength: videoBytes.byteLength,
+      matches: true,
+    });
+
+    const reopened = await JSZip.loadAsync(zipBytes);
+    const videoPath = `${naming.primaryFolder}/${video.group}/${video.name}`;
+    expect(Object.keys(reopened.files).sort()).toEqual(
+      [
+        `${naming.primaryFolder}/`,
+        `${naming.primaryFolder}/${video.group}/`,
+        videoPath,
+        `${naming.primaryFolder}/${video.group}/Captura video.png`,
+        `${naming.secondaryFolder}/`,
+        `${naming.secondaryFolder}/Sólo capturas/`,
+        `${naming.secondaryFolder}/Sólo capturas/Captura sin video.jpg`,
+        naming.pdfFilename,
+      ].sort(),
+    );
+    expect(await reopened.file(videoPath)?.async("uint8array")).toEqual(
+      videoBytes,
+    );
+    expect(
+      await sha256Hex(
+        (await reopened.file(videoPath)?.async("uint8array")) ??
+          new Uint8Array(),
+      ),
+    ).toBe(video.sha256);
+
+    const pdf = await PDFDocument.load(manifestPdf, { updateMetadata: false });
+    const decoded = decodedPdfContent(pdf);
+    expect(pdf.getTitle()).toBe(naming.title);
+    expect(decoded).toContain(pdfHexString("Tipo de archivo: Video"));
+    expect(decoded).toContain(pdfHexString(video.sha256));
+    expect(decoded).not.toContain(
+      pdfHexString("ESTE PARRAFO NO DEBE APARECER EN EL PDF"),
+    );
+    expect(decoded).not.toContain(pdfHexString(video.detectedType));
+    expect(decoded).not.toContain(pdfHexString("Prueba Digital"));
+  });
+
+  it("conserva audio, video y una captura compartida una sola vez en un paquete mixto", async () => {
+    const sharedCapture = "Contexto compartido.jpg";
+    const audio = await makeAudio({
+      name: "01 audio.ogg",
+      group: "M",
+      detectedType: "MARCADOR_INTERNO_AUDIO",
+      captureNames: [sharedCapture],
+    });
+    const video = await makeVideo({
+      name: "02 video.mp4",
+      group: "M",
+      detectedType: "MARCADOR_INTERNO_VIDEO",
+      captureNames: [sharedCapture],
+    });
+    const media = [audio, video] as const;
+    const naming = evidenceNamingForMedia(media);
+    const manifestPdf = await generateManifestPdf(media, {
+      calculationDate: "31/07/2026 16:10",
+      conclusion: "Cierre mixto.",
+    });
+
+    const result = await generateEvidenceZip({
+      media,
+      captures: [
+        {
+          name: sharedCapture,
+          group: "M",
+          bytes: Uint8Array.from([255, 216, 255, 224]),
+        },
+      ],
+      manifestPdf,
+      naming,
+    });
+
+    expect(result.naming).toEqual(naming);
+    expect(result.integrityReport).toMatchObject({
+      ok: true,
+      mediaCount: 2,
+      audioCount: 1,
+      videoCount: 1,
+    });
+    expect(result.integrityReport.entries.map((entry) => entry.kind)).toEqual([
+      "audio",
+      "video",
+    ]);
+
+    const reopened = await JSZip.loadAsync(result.zipBytes);
+    const capturePath = `${naming.primaryFolder}/M/${sharedCapture}`;
+    expect(
+      Object.keys(reopened.files).filter((path) => path === capturePath),
+    ).toHaveLength(1);
+    expect(reopened.file(`${naming.primaryFolder}/M/${audio.name}`)).not.toBeNull();
+    expect(reopened.file(`${naming.primaryFolder}/M/${video.name}`)).not.toBeNull();
+    expect(reopened.file(naming.pdfFilename)).not.toBeNull();
+
+    const csv = generateInventoryCsv(media);
+    const txt = generateManifestTxt(media, {
+      calculationDate: "31/07/2026 16:10",
+    });
+    const filing = generateFilingText(media, "https://drive.example.test/mixed");
+    expect(csv).toContain('"Audio"');
+    expect(csv).toContain('"Video"');
+    expect(csv).not.toContain("MARCADOR_INTERNO_AUDIO");
+    expect(csv).not.toContain("MARCADOR_INTERNO_VIDEO");
+    expect(txt).toContain("Tipo de archivo: Audio");
+    expect(txt).toContain("Tipo de archivo: Video");
+    expect(txt).toContain(naming.title);
+    expect(txt).not.toContain("MARCADOR_INTERNO_AUDIO");
+    expect(txt).not.toContain("MARCADOR_INTERNO_VIDEO");
+    expect(filing).toContain("archivos de audio y video");
+    expect(filing).toContain(naming.pdfFilename);
+    expect(filing).toContain(`Archivo 1 (Audio): “${audio.name}”`);
+    expect(filing).toContain(`Archivo 2 (Video): “${video.name}”`);
+
+    const pdf = await PDFDocument.load(manifestPdf, { updateMetadata: false });
+    const decoded = decodedPdfContent(pdf);
+    expect(pdf.getTitle()).toBe(naming.title);
+    expect(decoded).toContain(pdfHexString("Tipo de archivo: Audio"));
+    expect(decoded).toContain(pdfHexString("Tipo de archivo: Video"));
+    expect(decoded).not.toContain(pdfHexString("MARCADOR_INTERNO_AUDIO"));
+    expect(decoded).not.toContain(pdfHexString("MARCADOR_INTERNO_VIDEO"));
+    expect(decoded).not.toContain(pdfHexString("Prueba Digital"));
   });
 
   it("falla con un reporte útil si el hash declarado no coincide", async () => {

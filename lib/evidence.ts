@@ -7,13 +7,26 @@ export type DetectedFormat =
   | "mp3"
   | "m4a"
   | "aac"
+  | "mp4"
+  | "m4v"
+  | "mov"
+  | "3gp"
+  | "3g2"
+  | "webm"
+  | "mkv"
+  | "avi"
+  | "ogv"
+  | "mpeg"
+  | "mpegts"
+  | "wmv"
+  | "flv"
   | "jpeg"
   | "png"
   | "webp"
   | "heic"
   | "unknown";
 
-export type EvidenceKind = "audio" | "image" | "unknown";
+export type EvidenceKind = "audio" | "video" | "image" | "unknown";
 export type EvidenceSource = "zip" | "folder" | "loose";
 
 export interface WavDuration {
@@ -47,7 +60,11 @@ export interface EvidenceGroup {
   name: string;
   sourceFile?: File;
   files: EvidenceFile[];
+  /** Audio and video evidence in its original byte-for-byte form. */
+  media: EvidenceFile[];
+  /** Kept as a convenience and for backwards compatibility. */
   audios: EvidenceFile[];
+  videos: EvidenceFile[];
   images: EvidenceFile[];
 }
 
@@ -69,7 +86,9 @@ export interface EvidenceLimits {
 
 export interface EvidenceLoadOptions {
   limits?: Partial<EvidenceLimits>;
-  /** Hash detected audio files during loading. Defaults to true. */
+  /** Hash detected audio and video files during loading. Defaults to true. */
+  hashMedia?: boolean;
+  /** @deprecated Alias for hashMedia, kept for backwards compatibility. */
   hashAudio?: boolean;
 }
 
@@ -100,6 +119,22 @@ const AUDIO_FORMATS: ReadonlySet<DetectedFormat> = new Set([
   "aac",
 ]);
 
+const VIDEO_FORMATS: ReadonlySet<DetectedFormat> = new Set([
+  "mp4",
+  "m4v",
+  "mov",
+  "3gp",
+  "3g2",
+  "webm",
+  "mkv",
+  "avi",
+  "ogv",
+  "mpeg",
+  "mpegts",
+  "wmv",
+  "flv",
+]);
+
 const IMAGE_FORMATS: ReadonlySet<DetectedFormat> = new Set([
   "jpeg",
   "png",
@@ -116,6 +151,26 @@ const EXPECTED_FORMATS_BY_EXTENSION: Readonly<
   mp3: ["mp3"],
   m4a: ["m4a"],
   aac: ["aac"],
+  mp4: ["mp4", "m4v"],
+  m4v: ["m4v", "mp4"],
+  mov: ["mov"],
+  qt: ["mov"],
+  "3gp": ["3gp"],
+  "3g2": ["3g2"],
+  webm: ["webm"],
+  mkv: ["mkv"],
+  avi: ["avi"],
+  ogv: ["ogv"],
+  mpg: ["mpeg"],
+  mpeg: ["mpeg"],
+  mpe: ["mpeg"],
+  vob: ["mpeg"],
+  ts: ["mpegts"],
+  mts: ["mpegts"],
+  m2ts: ["mpegts"],
+  wmv: ["wmv"],
+  asf: ["wmv"],
+  flv: ["flv"],
   jpg: ["jpeg"],
   jpeg: ["jpeg"],
   png: ["png"],
@@ -131,6 +186,19 @@ const FORMAT_LABELS: Readonly<Record<DetectedFormat, string>> = {
   mp3: "MP3",
   m4a: "M4A",
   aac: "AAC",
+  mp4: "MP4",
+  m4v: "M4V",
+  mov: "MOV/QuickTime",
+  "3gp": "3GP",
+  "3g2": "3G2",
+  webm: "WebM",
+  mkv: "Matroska/MKV",
+  avi: "AVI",
+  ogv: "Ogg Video",
+  mpeg: "MPEG",
+  mpegts: "MPEG-TS",
+  wmv: "WMV/ASF",
+  flv: "FLV",
   jpeg: "JPEG",
   png: "PNG",
   webp: "WebP",
@@ -165,7 +233,9 @@ type ZipObjectWithMetadata = JSZipObject & {
 
 interface MutableGroup extends EvidenceGroup {
   files: EvidenceFile[];
+  media: EvidenceFile[];
   audios: EvidenceFile[];
+  videos: EvidenceFile[];
   images: EvidenceFile[];
 }
 
@@ -218,6 +288,18 @@ function readUint32BigEndian(bytes: Uint8Array, offset: number): number {
     bytes[offset + 1] * 0x10000 +
     bytes[offset + 2] * 0x100 +
     bytes[offset + 3]
+  );
+}
+
+function hasMpegTransportStreamSync(
+  bytes: Uint8Array,
+  firstSyncOffset: number,
+): boolean {
+  return (
+    bytes.length > firstSyncOffset + 376 &&
+    bytes[firstSyncOffset] === 0x47 &&
+    bytes[firstSyncOffset + 188] === 0x47 &&
+    bytes[firstSyncOffset + 376] === 0x47
   );
 }
 
@@ -574,7 +656,9 @@ function getOrCreateGroup(
     name,
     sourceFile,
     files: [],
+    media: [],
     audios: [],
+    videos: [],
     images: [],
   };
   groupMap.set(key, group);
@@ -585,7 +669,11 @@ function getOrCreateGroup(
 function addFileToGroup(group: MutableGroup, evidence: EvidenceFile): void {
   group.files.push(evidence);
   if (evidence.kind === "audio") {
+    group.media.push(evidence);
     group.audios.push(evidence);
+  } else if (evidence.kind === "video") {
+    group.media.push(evidence);
+    group.videos.push(evidence);
   } else if (evidence.kind === "image") {
     group.images.push(evidence);
   }
@@ -611,7 +699,7 @@ async function processEvidenceFile(
   group: MutableGroup,
   source: EvidenceSource,
   id: string,
-  hashAudio: boolean,
+  hashMedia: boolean,
 ): Promise<EvidenceFile> {
   const name = file.name;
   const header = await file.slice(0, HEADER_BYTES).arrayBuffer();
@@ -635,10 +723,13 @@ async function processEvidenceFile(
     associatedCaptureIds: [],
   };
 
-  if (kind === "audio" && (hashAudio || detectedFormat === "wav")) {
+  if (
+    (kind === "audio" || kind === "video") &&
+    (hashMedia || detectedFormat === "wav")
+  ) {
     const contents = await file.arrayBuffer();
 
-    if (hashAudio) {
+    if (hashMedia) {
       evidence.sha256 = await sha256(contents);
     }
 
@@ -729,9 +820,59 @@ export function detectFormat(input: ArrayBuffer | Uint8Array): DetectedFormat {
     return "webp";
   }
 
+  if (asciiEquals(bytes, 0, "RIFF") && asciiEquals(bytes, 8, "AVI ")) {
+    return "avi";
+  }
+
+  if (
+    bytes.length >= 16 &&
+    bytes[0] === 0x30 &&
+    bytes[1] === 0x26 &&
+    bytes[2] === 0xb2 &&
+    bytes[3] === 0x75 &&
+    bytes[4] === 0x8e &&
+    bytes[5] === 0x66 &&
+    bytes[6] === 0xcf &&
+    bytes[7] === 0x11 &&
+    bytes[8] === 0xa6 &&
+    bytes[9] === 0xd9 &&
+    bytes[10] === 0x00 &&
+    bytes[11] === 0xaa &&
+    bytes[12] === 0x00 &&
+    bytes[13] === 0x62 &&
+    bytes[14] === 0xce &&
+    bytes[15] === 0x6c
+  ) {
+    return "wmv";
+  }
+
+  if (
+    bytes.length >= 4 &&
+    asciiEquals(bytes, 0, "FLV") &&
+    bytes[3] === 0x01
+  ) {
+    return "flv";
+  }
+
+  if (
+    bytes.length >= 4 &&
+    bytes[0] === 0x1a &&
+    bytes[1] === 0x45 &&
+    bytes[2] === 0xdf &&
+    bytes[3] === 0xa3
+  ) {
+    if (findAscii(bytes, "webm", 4, HEADER_BYTES)) {
+      return "webm";
+    }
+    if (findAscii(bytes, "matroska", 4, HEADER_BYTES)) {
+      return "mkv";
+    }
+    return "unknown";
+  }
+
   if (asciiEquals(bytes, 0, "OggS")) {
     if (findAscii(bytes, "theora", 4, HEADER_BYTES)) {
-      return "unknown";
+      return "ogv";
     }
     return findAscii(bytes, "OpusHead", 4, HEADER_BYTES) ? "opus" : "ogg";
   }
@@ -792,6 +933,57 @@ export function detectFormat(input: ArrayBuffer | Uint8Array): DetectedFormat {
     if (brands.some((brand) => m4aBrands.has(brand))) {
       return "m4a";
     }
+
+    if (brands.includes("qt  ")) {
+      return "mov";
+    }
+
+    if (brands.some((brand) => brand.startsWith("3g2"))) {
+      return "3g2";
+    }
+
+    if (brands.some((brand) => brand.startsWith("3gp"))) {
+      return "3gp";
+    }
+
+    const m4vBrands = new Set(["M4V ", "M4VH", "M4VP"]);
+    if (brands.some((brand) => m4vBrands.has(brand))) {
+      return "m4v";
+    }
+
+    const mp4Brands = new Set([
+      "isom",
+      "iso2",
+      "iso3",
+      "iso4",
+      "iso5",
+      "iso6",
+      "mp41",
+      "mp42",
+      "avc1",
+      "dash",
+      "MSNV",
+    ]);
+    if (brands.some((brand) => mp4Brands.has(brand))) {
+      return "mp4";
+    }
+  }
+
+  if (
+    (bytes.length >= 4 &&
+      bytes[0] === 0x00 &&
+      bytes[1] === 0x00 &&
+      bytes[2] === 0x01 &&
+      (bytes[3] === 0xba || bytes[3] === 0xb3))
+  ) {
+    return "mpeg";
+  }
+
+  if (
+    hasMpegTransportStreamSync(bytes, 0) ||
+    hasMpegTransportStreamSync(bytes, 4)
+  ) {
+    return "mpegts";
   }
 
   // ADTS AAC has a 12-bit sync word and a zero MPEG layer.
@@ -823,6 +1015,9 @@ export async function detectFileFormat(file: Blob): Promise<DetectedFormat> {
 export function classifyFormat(format: DetectedFormat): EvidenceKind {
   if (AUDIO_FORMATS.has(format)) {
     return "audio";
+  }
+  if (VIDEO_FORMATS.has(format)) {
+    return "video";
   }
   if (IMAGE_FORMATS.has(format)) {
     return "image";
@@ -980,7 +1175,7 @@ export async function loadEvidenceFiles(
     );
   }
 
-  const hashAudio = options.hashAudio ?? true;
+  const hashMedia = options.hashMedia ?? options.hashAudio ?? true;
   const groups: MutableGroup[] = [];
   const groupMap = new Map<string, MutableGroup>();
   const ignored: string[] = [];
@@ -1227,7 +1422,7 @@ export async function loadEvidenceFiles(
           group,
           "zip",
           nextFileId(),
-          hashAudio,
+          hashMedia,
         );
         addFileToGroup(group, evidence);
         if (evidence.warning) {
@@ -1239,7 +1434,9 @@ export async function loadEvidenceFiles(
 
       if (extractionUnsafeReason) {
         group.files.length = 0;
+        group.media.length = 0;
         group.audios.length = 0;
+        group.videos.length = 0;
         group.images.length = 0;
         const groupIndex = groups.indexOf(group);
         if (groupIndex >= 0) {
@@ -1294,7 +1491,7 @@ export async function loadEvidenceFiles(
       group,
       isFolderFile ? "folder" : "loose",
       nextFileId(),
-      hashAudio,
+      hashMedia,
     );
     addFileToGroup(group, evidence);
     if (evidence.warning) {
@@ -1306,14 +1503,16 @@ export async function loadEvidenceFiles(
     const byPath = (left: EvidenceFile, right: EvidenceFile): number =>
       left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
     group.files.sort(byPath);
+    group.media.sort(byPath);
     group.audios.sort(byPath);
+    group.videos.sort(byPath);
     group.images.sort(byPath);
 
     if (group.images.length === 1) {
       const captureId = group.images[0].id;
-      for (const audio of group.audios) {
-        audio.associatedCaptureId = captureId;
-        audio.associatedCaptureIds = [captureId];
+      for (const media of group.media) {
+        media.associatedCaptureId = captureId;
+        media.associatedCaptureIds = [captureId];
       }
     }
   }

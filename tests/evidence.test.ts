@@ -70,6 +70,33 @@ function makeJpeg(): Uint8Array {
   return new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0xff, 0xd9]);
 }
 
+function makeFtyp(majorBrand: string, compatibleBrands: string[] = []) {
+  const bytes = new Uint8Array(16 + compatibleBrands.length * 4);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(0, bytes.length, false);
+  writeAscii(bytes, 4, "ftyp");
+  writeAscii(bytes, 8, majorBrand);
+  for (let index = 0; index < compatibleBrands.length; index += 1) {
+    writeAscii(bytes, 16 + index * 4, compatibleBrands[index]);
+  }
+  return bytes;
+}
+
+function makeEbml(docType: "webm" | "matroska"): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes.set([0x1a, 0x45, 0xdf, 0xa3], 0);
+  writeAscii(bytes, 12, docType);
+  return bytes;
+}
+
+function makeMpegTransportStream(firstSyncOffset = 0): Uint8Array {
+  const bytes = new Uint8Array(firstSyncOffset + 377);
+  bytes[firstSyncOffset] = 0x47;
+  bytes[firstSyncOffset + 188] = 0x47;
+  bytes[firstSyncOffset + 376] = 0x47;
+  return bytes;
+}
+
 function makeFolderFile(
   contents: Uint8Array,
   name: string,
@@ -99,10 +126,7 @@ describe("detección por contenido", () => {
     ["mp3", new Uint8Array([0x49, 0x44, 0x33, 4, 0, 0])],
     [
       "m4a",
-      new Uint8Array([
-        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x4d, 0x34, 0x41, 0x20, 0, 0, 0, 0,
-        0x69, 0x73, 0x6f, 0x6d,
-      ]),
+      makeFtyp("M4A ", ["isom"]),
     ],
     ["aac", new Uint8Array([0xff, 0xf1, 0x50, 0x80])],
     ["jpeg", makeJpeg()],
@@ -115,14 +139,66 @@ describe("detección por contenido", () => {
     ],
     [
       "heic",
-      new Uint8Array([
-        0, 0, 0, 20, 0x66, 0x74, 0x79, 0x70, 0x68, 0x65, 0x69, 0x63, 0, 0, 0, 0,
-        0x6d, 0x69, 0x66, 0x31,
-      ]),
+      makeFtyp("heic", ["mif1", "isom"]),
     ],
   ] as const)("detecta %s por magic bytes", (expected, bytes) => {
     expect(detectFormat(bytes)).toBe(expected);
     expect(classifyFormat(expected)).not.toBe("unknown");
+  });
+
+  it.each([
+    ["mp4", makeFtyp("isom", ["mp42"])],
+    ["m4v", makeFtyp("M4V ", ["isom"])],
+    ["mov", makeFtyp("qt  ")],
+    ["3gp", makeFtyp("3gp6", ["isom"])],
+    ["3g2", makeFtyp("3g2a", ["isom"])],
+    ["webm", makeEbml("webm")],
+    ["mkv", makeEbml("matroska")],
+    [
+      "avi",
+      (() => {
+        const bytes = new Uint8Array(12);
+        writeAscii(bytes, 0, "RIFF");
+        writeAscii(bytes, 8, "AVI ");
+        return bytes;
+      })(),
+    ],
+    [
+      "ogv",
+      (() => {
+        const bytes = new Uint8Array(64);
+        writeAscii(bytes, 0, "OggS");
+        writeAscii(bytes, 28, "theora");
+        return bytes;
+      })(),
+    ],
+    ["mpeg", new Uint8Array([0x00, 0x00, 0x01, 0xba])],
+    ["mpegts", makeMpegTransportStream()],
+    ["mpegts", makeMpegTransportStream(4)],
+    [
+      "wmv",
+      new Uint8Array([
+        0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00,
+        0xaa, 0x00, 0x62, 0xce, 0x6c,
+      ]),
+    ],
+    ["flv", new Uint8Array([0x46, 0x4c, 0x56, 0x01])],
+  ] as const)("detecta el contenedor de video %s por su firma", (expected, bytes) => {
+    expect(detectFormat(bytes)).toBe(expected);
+    expect(classifyFormat(expected)).toBe("video");
+  });
+
+  it("prioriza las marcas de imagen y audio sobre una marca compatible MP4", () => {
+    expect(detectFormat(makeFtyp("heic", ["mif1", "isom"]))).toBe("heic");
+    expect(detectFormat(makeFtyp("M4A ", ["isom", "mp42"]))).toBe("m4a");
+    expect(classifyFormat("heic")).toBe("image");
+    expect(classifyFormat("m4a")).toBe("audio");
+  });
+
+  it("no atribuye un tipo EBML si el DocType no está presente", () => {
+    expect(detectFormat(new Uint8Array([0x1a, 0x45, 0xdf, 0xa3]))).toBe(
+      "unknown",
+    );
   });
 
   it("detecta un .ogg cuyo contenido real es WAV y genera advertencia", async () => {
@@ -142,6 +218,25 @@ describe("detección por contenido", () => {
       "no coincide con el contenido detectado (WAV)",
     );
     expect(loaded.files[0].file.name).toBe("Audio real.ogg");
+  });
+
+  it("valida las extensiones de video contra el contenido, no a la inversa", async () => {
+    const correct = new File(
+      [standaloneBuffer(makeFtyp("qt  "))],
+      "Audiencia.mov",
+    );
+    const disguised = new File(
+      [standaloneBuffer(makeFtyp("isom"))],
+      "Audiencia.avi",
+    );
+    const loaded = await loadEvidenceFiles([correct, disguised]);
+
+    expect(loaded.files.find((file) => file.name === correct.name)?.warning).toBe(
+      undefined,
+    );
+    expect(
+      loaded.files.find((file) => file.name === disguised.name)?.warning,
+    ).toContain("contenido detectado (MP4)");
   });
 });
 
@@ -390,6 +485,112 @@ describe("nombres y basura de macOS", () => {
     expect(groupB.audios.map((audio) => audio.associatedCaptureId)).not.toContain(
       groupA.images[0].id,
     );
+  });
+});
+
+describe("medios audiovisuales y asociaciones", () => {
+  it("clasifica y calcula SHA-256 para un grupo que sólo contiene video", async () => {
+    const contents = makeFtyp("isom", ["mp42"]);
+    const loaded = await loadEvidenceFiles([
+      new File([standaloneBuffer(contents)], "video.mp4"),
+    ]);
+    const [group] = loaded.groups;
+    const [video] = group.videos;
+
+    expect(video).toMatchObject({
+      kind: "video",
+      detectedFormat: "mp4",
+      sha256: await sha256(contents),
+    });
+    expect(isValidSha256(video.sha256 ?? "")).toBe(true);
+    expect(group.media).toEqual([video]);
+    expect(group.audios).toHaveLength(0);
+    expect(group.images).toHaveLength(0);
+  });
+
+  it("permite omitir el hash de todos los medios con la opción nueva o su alias", async () => {
+    const file = new File(
+      [standaloneBuffer(makeFtyp("isom"))],
+      "video.mp4",
+    );
+    const withNewOption = await loadEvidenceFiles([file], {
+      hashMedia: false,
+    });
+    const withLegacyAlias = await loadEvidenceFiles([file], {
+      hashAudio: false,
+    });
+
+    expect(withNewOption.groups[0].videos[0].sha256).toBeUndefined();
+    expect(withLegacyAlias.groups[0].videos[0].sha256).toBeUndefined();
+  });
+
+  it("asocia la única captura del grupo a su audio y su video", async () => {
+    const loaded = await loadEvidenceFiles([
+      makeFolderFile(makeWav(250), "audio.wav", "A/audio.wav"),
+      makeFolderFile(makeFtyp("isom"), "video.mp4", "A/video.mp4"),
+      makeFolderFile(makeJpeg(), "captura.jpg", "A/captura.jpg"),
+    ]);
+    const [group] = loaded.groups;
+    const captureId = group.images[0].id;
+
+    expect(group.media).toHaveLength(2);
+    expect(group.audios).toHaveLength(1);
+    expect(group.videos).toHaveLength(1);
+    expect(
+      group.media.every(
+        (media) =>
+          media.associatedCaptureId === captureId &&
+          media.associatedCaptureIds[0] === captureId,
+      ),
+    ).toBe(true);
+  });
+
+  it("no inventa una asociación cuando el grupo tiene varias capturas", async () => {
+    const loaded = await loadEvidenceFiles([
+      makeFolderFile(makeWav(250), "audio.wav", "A/audio.wav"),
+      makeFolderFile(makeFtyp("isom"), "video.mp4", "A/video.mp4"),
+      makeFolderFile(makeJpeg(), "captura 1.jpg", "A/captura 1.jpg"),
+      makeFolderFile(makeJpeg(), "captura 2.jpg", "A/captura 2.jpg"),
+    ]);
+    const [group] = loaded.groups;
+
+    expect(group.images).toHaveLength(2);
+    expect(
+      group.media.every(
+        (media) =>
+          media.associatedCaptureId === undefined &&
+          media.associatedCaptureIds.length === 0,
+      ),
+    ).toBe(true);
+  });
+
+  it("mantiene separados los medios y las capturas de carpetas distintas", async () => {
+    const loaded = await loadEvidenceFiles([
+      makeFolderFile(makeFtyp("isom"), "video A.mp4", "A/video A.mp4"),
+      makeFolderFile(makeJpeg(), "captura A.jpg", "A/captura A.jpg"),
+      makeFolderFile(makeWav(250), "audio B.wav", "B/audio B.wav"),
+      makeFolderFile(makeFtyp("qt  "), "video B.mov", "B/video B.mov"),
+      makeFolderFile(makeJpeg(), "captura B.jpg", "B/captura B.jpg"),
+    ]);
+    const [groupA, groupB] = loaded.groups;
+
+    expect(loaded.groups.map((group) => group.name)).toEqual(["A", "B"]);
+    expect(groupA.media.map((media) => media.name)).toEqual(["video A.mp4"]);
+    expect(groupB.media.map((media) => media.name)).toEqual([
+      "audio B.wav",
+      "video B.mov",
+    ]);
+    expect(
+      groupA.media.every(
+        (media) => media.associatedCaptureId === groupA.images[0].id,
+      ),
+    ).toBe(true);
+    expect(
+      groupB.media.every(
+        (media) => media.associatedCaptureId === groupB.images[0].id,
+      ),
+    ).toBe(true);
+    expect(groupA.media[0].associatedCaptureId).not.toBe(groupB.images[0].id);
   });
 });
 
