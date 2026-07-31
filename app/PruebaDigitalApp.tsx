@@ -36,6 +36,7 @@ import {
 import {
   type ChangeEvent,
   type DragEvent,
+  type KeyboardEvent,
   type ReactNode,
   useEffect,
   useMemo,
@@ -486,6 +487,9 @@ export function PruebaDigitalApp() {
     {},
   );
   const [audioOrder, setAudioOrder] = useState<string[]>([]);
+  const [activeAssociationGroupId, setActiveAssociationGroupId] = useState<
+    string | null
+  >(null);
   const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
   const [manifest, setManifest] = useState<ManifestForm>(initialManifest);
   const [generated, setGenerated] = useState<GeneratedPackage | null>(null);
@@ -576,9 +580,67 @@ export function PruebaDigitalApp() {
     ];
   }, [audios, audioOrder]);
 
+  const orderedAudiosByGroup = useMemo(
+    () =>
+      groups.flatMap((group) =>
+        orderedAudios.filter((audio) => audio.groupId === group.id),
+      ),
+    [groups, orderedAudios],
+  );
+
   const includedAudios = useMemo(
-    () => orderedAudios.filter((audio) => !excludedIds.has(audio.id)),
-    [orderedAudios, excludedIds],
+    () =>
+      orderedAudiosByGroup.filter((audio) => !excludedIds.has(audio.id)),
+    [excludedIds, orderedAudiosByGroup],
+  );
+
+  const manifestPositionByAudioId = useMemo(
+    () =>
+      new Map(
+        includedAudios.map((audio, index) => [audio.id, index + 1] as const),
+      ),
+    [includedAudios],
+  );
+
+  const associationGroups = useMemo(
+    () =>
+      groups
+        .map((group) => {
+          const groupAudios = orderedAudios.filter(
+            (audio) => audio.groupId === group.id,
+          );
+          const groupImages = images.filter(
+            (image) => image.groupId === group.id,
+          );
+          const pendingAssociations = groupAudios.filter(
+            (audio) =>
+              !excludedIds.has(audio.id) &&
+              (associations[audio.id] ?? []).length === 0,
+          ).length;
+          return {
+            ...group,
+            audios: groupAudios,
+            captures: groupImages,
+            pendingAssociations,
+          };
+        })
+        .filter((group) => group.audios.length > 0),
+    [associations, excludedIds, groups, images, orderedAudios],
+  );
+
+  const activeAssociationGroup =
+    associationGroups.find(
+      (group) => group.id === activeAssociationGroupId,
+    ) ??
+    associationGroups.find((group) => group.pendingAssociations > 0) ??
+    associationGroups[0];
+
+  const visibleAssociationAudios = activeAssociationGroup?.audios ?? [];
+  const visibleIncludedAssociationAudioIds = visibleAssociationAudios
+    .filter((audio) => !excludedIds.has(audio.id))
+    .map((audio) => audio.id);
+  const activeAssociationGroupIndex = associationGroups.findIndex(
+    (group) => group.id === activeAssociationGroup?.id,
   );
 
   const duplicatePaths = useMemo(() => {
@@ -592,6 +654,24 @@ export function PruebaDigitalApp() {
       .filter(([, count]) => count > 1)
       .map(([path]) => path);
   }, [files, excludedIds]);
+
+  const duplicateGroupNames = useMemo(() => {
+    const names = new Map<string, { name: string; count: number }>();
+    for (const group of groups) {
+      const key = group.name
+        .normalize("NFKC")
+        .trim()
+        .toLocaleLowerCase("es-AR");
+      const current = names.get(key);
+      names.set(key, {
+        name: current?.name ?? group.name,
+        count: (current?.count ?? 0) + 1,
+      });
+    }
+    return Array.from(names.values())
+      .filter(({ count }) => count > 1)
+      .map(({ name }) => name);
+  }, [groups]);
 
   const audiosWithoutCapture = useMemo(
     () =>
@@ -724,7 +804,18 @@ export function PruebaDigitalApp() {
   }
 
   function handleFileInput(event: ChangeEvent<HTMLInputElement>) {
-    void ingestFiles(Array.from(event.target.files ?? []));
+    const selectedFiles = Array.from(event.target.files ?? []);
+    if (
+      event.currentTarget.id === "evidence-folder-input" &&
+      selectedFiles.some((file) => !file.webkitRelativePath)
+    ) {
+      setLoadError(
+        "El navegador no conservó las carpetas seleccionadas. Probá arrastrándolas juntas o elegí la carpeta que contiene A, B y las demás.",
+      );
+      event.currentTarget.value = "";
+      return;
+    }
+    void ingestFiles(selectedFiles);
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -737,7 +828,7 @@ export function PruebaDigitalApp() {
         await ingestFiles(droppedFiles);
       } catch {
         setLoadError(
-          "No pudimos recorrer esa carpeta. Probá con el botón “Elegir carpeta”.",
+          "No pudimos recorrer esas carpetas. Probá con el botón “Elegir varias carpetas”.",
         );
       }
     })();
@@ -755,15 +846,65 @@ export function PruebaDigitalApp() {
     });
   }
 
-  function moveAudio(id: string, direction: -1 | 1) {
+  function moveAudio(
+    id: string,
+    direction: -1 | 1,
+    visibleIds: readonly string[],
+  ) {
     setAudioOrder((current) => {
+      const visibleIndex = visibleIds.indexOf(id);
+      const targetVisibleIndex = visibleIndex + direction;
+      if (
+        visibleIndex < 0 ||
+        targetVisibleIndex < 0 ||
+        targetVisibleIndex >= visibleIds.length
+      ) {
+        return current;
+      }
+      const targetId = visibleIds[targetVisibleIndex];
       const index = current.indexOf(id);
-      const target = index + direction;
-      if (index < 0 || target < 0 || target >= current.length) return current;
+      const target = current.indexOf(targetId);
+      if (index < 0 || target < 0) return current;
       const next = [...current];
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+  }
+
+  function selectAssociationGroup(
+    groupId: string,
+    focusIndex?: number,
+  ) {
+    setActiveAssociationGroupId(groupId);
+    if (focusIndex === undefined) return;
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`association-folder-tab-${focusIndex}`)
+        ?.focus();
+    });
+  }
+
+  function handleAssociationTabKeyDown(
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) {
+    let nextIndex: number | undefined;
+    if (event.key === "ArrowRight") {
+      nextIndex = (index + 1) % associationGroups.length;
+    } else if (event.key === "ArrowLeft") {
+      nextIndex =
+        (index - 1 + associationGroups.length) % associationGroups.length;
+    } else if (event.key === "Home") {
+      nextIndex = 0;
+    } else if (event.key === "End") {
+      nextIndex = associationGroups.length - 1;
+    }
+    if (nextIndex === undefined) return;
+    event.preventDefault();
+    const nextGroup = associationGroups[nextIndex];
+    if (nextGroup) {
+      selectAssociationGroup(nextGroup.id, nextIndex);
+    }
   }
 
   function toggleExcluded(file: EvidenceFile) {
@@ -853,7 +994,15 @@ export function PruebaDigitalApp() {
     }
     if (duplicatePaths.length) {
       setGenerateError(
-        "Hay nombres duplicados dentro de un mismo grupo. Revisalos antes de generar para no sobrescribir archivos.",
+        "Hay nombres duplicados dentro de una misma carpeta. Revisalos antes de generar para no sobrescribir archivos.",
+      );
+      return;
+    }
+    if (duplicateGroupNames.length) {
+      setGenerateError(
+        `Hay carpetas con nombres repetidos (${duplicateGroupNames.join(
+          ", ",
+        )}). Cambiá esos nombres antes de generar para que no se mezclen.`,
       );
       return;
     }
@@ -979,6 +1128,7 @@ export function PruebaDigitalApp() {
     setLoadWarnings([]);
     setAssociations({});
     setAudioOrder([]);
+    setActiveAssociationGroupId(null);
     setExcludedIds(new Set());
     setManifest(initialManifest());
     setGenerated(null);
@@ -1187,8 +1337,8 @@ export function PruebaDigitalApp() {
             <section className="workspace-section">
               <SectionHeading
                 eyebrow="Paso 1 de 5"
-                title="Cargá el material"
-                description="Podés seleccionar varios ZIP, una carpeta completa o archivos sueltos. Los nombres y bytes originales se conservan."
+                title="Cargá tus carpetas juntas"
+                description="Elegí A, B, C y las demás carpetas en una sola carga. La aplicación las separa, valida sus archivos y conserva los nombres y bytes originales."
               />
 
               <div
@@ -1221,27 +1371,32 @@ export function PruebaDigitalApp() {
                     <span className="drop-icon">
                       <CloudUpload size={32} />
                     </span>
-                    <h2>Arrastrá una carpeta o tus archivos acá</h2>
+                    <h2>Arrastrá todas las carpetas juntas</h2>
                     <p>
-                      También podés elegir una carpeta completa con el botón.
+                      También podés elegir varias carpetas con el botón.
                     </p>
                     <div className="drop-actions">
                       <button
                         className="primary-button"
+                        type="button"
+                        onClick={() => folderInputRef.current?.click()}
+                      >
+                        <FolderOpen size={18} />
+                        Elegir varias carpetas
+                      </button>
+                      <button
+                        className="secondary-button"
                         type="button"
                         onClick={() => fileInputRef.current?.click()}
                       >
                         <Upload size={18} />
                         Elegir ZIP o archivos
                       </button>
-                      <button
-                        className="secondary-button"
-                        type="button"
-                        onClick={() => folderInputRef.current?.click()}
-                      >
-                        <FolderOpen size={18} />
-                        Elegir carpeta
-                      </button>
+                    </div>
+                    <div className="multi-folder-help">
+                      <strong>La forma más simple:</strong> elegí la carpeta que
+                      contiene A, B y C. También podés seleccionarlas juntas con{" "}
+                      <kbd>⌘</kbd> en Mac o <kbd>Ctrl</kbd> en Windows.
                     </div>
                     <span className="local-only">
                       <LockKeyhole size={14} /> Nada sale de este dispositivo
@@ -1263,6 +1418,7 @@ export function PruebaDigitalApp() {
                   type="file"
                   multiple
                   {...{ webkitdirectory: "", directory: "" }}
+                  aria-label="Seleccionar varias carpetas completas"
                   className="file-input-visually-hidden"
                   onChange={handleFileInput}
                 />
@@ -1298,7 +1454,7 @@ export function PruebaDigitalApp() {
                         type="button"
                         onClick={() => folderInputRef.current?.click()}
                       >
-                        <FolderOpen size={15} /> Agregar otra carpeta
+                        <FolderOpen size={15} /> Agregar más carpetas
                       </button>
                       <button
                         className="small-button"
@@ -1340,6 +1496,33 @@ export function PruebaDigitalApp() {
                         : "avisos"}
                     </span>
                   </div>
+                  {groups.length > 1 && duplicateGroupNames.length === 0 && (
+                    <div className="multi-folder-valid">
+                      <BadgeCheck size={18} />
+                      <span>
+                        Validamos y separamos {groups.length} carpetas. En el
+                        paso de asociaciones podrás abrir cada una desde su
+                        propia pestaña.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {duplicateGroupNames.length > 0 && (
+                <div className="alert alert-error" role="alert">
+                  <XCircle size={19} />
+                  <div>
+                    <strong>Hay carpetas con el mismo nombre</strong>
+                    <p>
+                      Cambiá el nombre de{" "}
+                      {duplicateGroupNames
+                        .map((name) => `“${name}”`)
+                        .join(", ")}{" "}
+                      antes de continuar, para que no se mezclen al preparar la
+                      carpeta de Drive.
+                    </p>
+                  </div>
                 </div>
               )}
 
@@ -1349,8 +1532,8 @@ export function PruebaDigitalApp() {
                   <div>
                     <strong>Hay rutas duplicadas</strong>
                     <p>
-                      Dos archivos quedarían con el mismo nombre dentro del
-                      mismo grupo. Podrás revisarlos antes de generar el
+                      Dos archivos quedarían con el mismo nombre dentro de la
+                      misma carpeta. Podrás revisarlos antes de generar el
                       paquete.
                     </p>
                   </div>
@@ -1364,7 +1547,11 @@ export function PruebaDigitalApp() {
                 <button
                   className="primary-button"
                   type="button"
-                  disabled={audios.length === 0 || isLoading}
+                  disabled={
+                    audios.length === 0 ||
+                    isLoading ||
+                    duplicateGroupNames.length > 0
+                  }
                   onClick={() => {
                     setStep(2);
                     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1387,8 +1574,8 @@ export function PruebaDigitalApp() {
                     <strong>{groups.length}</strong>
                     <span>
                       {groups.length === 1
-                        ? "grupo detectado"
-                        : "grupos detectados"}
+                        ? "carpeta detectada"
+                        : "carpetas detectadas"}
                     </span>
                   </div>
                 }
@@ -1429,7 +1616,7 @@ export function PruebaDigitalApp() {
                           {group.name.slice(0, 2).toUpperCase()}
                         </span>
                         <div>
-                          <h2>Grupo {group.name}</h2>
+                          <h2>Carpeta {group.name}</h2>
                           <p>
                             {groupAudios.length} audio
                             {groupAudios.length === 1 ? "" : "s"} ·{" "}
@@ -1526,7 +1713,7 @@ export function PruebaDigitalApp() {
                     </strong>
                     <p>
                       No se incluirá{unknownFiles.length === 1 ? "" : "n"} en el
-                      paquete. Revisá el nombre dentro de cada grupo.
+                      paquete. Revisá el nombre dentro de cada carpeta.
                     </p>
                   </div>
                 </div>
@@ -1547,8 +1734,8 @@ export function PruebaDigitalApp() {
             <section className="workspace-section wide-section">
               <SectionHeading
                 eyebrow="Paso 3 de 5"
-                title="Asociá y ordená los audios"
-                description="Confirmá qué captura acompaña a cada audio. El orden que ves será el del manifiesto."
+                title="Revisá una carpeta por vez"
+                description="Elegí una carpeta desde las pestañas. Si contiene una sola captura, ya la asociamos automáticamente a todos sus audios."
                 action={
                   <div className="heading-stat">
                     <strong>{includedAudios.length}</strong>
@@ -1561,33 +1748,174 @@ export function PruebaDigitalApp() {
                 }
               />
 
-              <div className="association-list">
-                {orderedAudios.map((audio, index) => {
+              {activeAssociationGroup && (
+                <>
+                  <section className="folder-tabs-card">
+                    <div className="folder-tabs-intro">
+                      <span className="mini-label">Carpetas cargadas</span>
+                      <h2>Elegí qué carpeta querés revisar</h2>
+                      <p>
+                        Tus asociaciones y cambios se guardan cuando pasás de
+                        una carpeta a otra.
+                      </p>
+                    </div>
+                    <div
+                      className="folder-tabs"
+                      role="tablist"
+                      aria-label="Carpetas con audios"
+                    >
+                      {associationGroups.map((group, index) => {
+                        const selected =
+                          group.id === activeAssociationGroup.id;
+                        return (
+                          <button
+                            className={`folder-tab${
+                              selected ? " is-active" : ""
+                            }`}
+                            type="button"
+                            role="tab"
+                            id={`association-folder-tab-${index}`}
+                            aria-selected={selected}
+                            aria-controls="association-folder-panel"
+                            tabIndex={selected ? 0 : -1}
+                            key={group.id}
+                            onClick={() =>
+                              selectAssociationGroup(group.id)
+                            }
+                            onKeyDown={(event) =>
+                              handleAssociationTabKeyDown(event, index)
+                            }
+                          >
+                            <FolderOpen size={19} />
+                            <span>
+                              <strong>Carpeta {group.name}</strong>
+                              <small>
+                                {quantityLabel(
+                                  group.audios.length,
+                                  "audio",
+                                )}{" "}
+                                ·{" "}
+                                {quantityLabel(
+                                  group.captures.length,
+                                  "captura",
+                                )}
+                              </small>
+                            </span>
+                            <span
+                              className={`folder-tab-status${
+                                group.pendingAssociations > 0
+                                  ? " has-pending"
+                                  : ""
+                              }`}
+                            >
+                              {group.pendingAssociations > 0 ? (
+                                <>
+                                  <AlertTriangle size={13} />
+                                  {quantityLabel(
+                                    group.pendingAssociations,
+                                    "pendiente",
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  <Check size={13} /> Lista
+                                </>
+                              )}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  <div className="active-folder-heading">
+                    <span className="active-folder-icon">
+                      <FolderOpen size={21} />
+                    </span>
+                    <div>
+                      <span className="mini-label">Carpeta seleccionada</span>
+                      <h2>Carpeta {activeAssociationGroup.name}</h2>
+                      <p>
+                        {quantityLabel(
+                          activeAssociationGroup.audios.length,
+                          "audio",
+                        )}{" "}
+                        ·{" "}
+                        {activeAssociationGroup.pendingAssociations === 0
+                          ? "todas las asociaciones están listas"
+                          : quantityLabel(
+                              activeAssociationGroup.pendingAssociations,
+                              "asociación pendiente",
+                            )}
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              <div
+                className="association-list"
+                id="association-folder-panel"
+                role="tabpanel"
+                aria-labelledby={
+                  activeAssociationGroupIndex >= 0
+                    ? `association-folder-tab-${activeAssociationGroupIndex}`
+                    : undefined
+                }
+              >
+                {visibleAssociationAudios.map((audio) => {
                   const groupCaptures = images.filter(
                     (image) => image.groupId === audio.groupId,
                   );
                   const isExcluded = excludedIds.has(audio.id);
+                  const manifestPosition = manifestPositionByAudioId.get(
+                    audio.id,
+                  );
+                  const includedGroupPosition =
+                    visibleIncludedAssociationAudioIds.indexOf(audio.id);
                   return (
                     <article
                       className={`audio-card${isExcluded ? " is-excluded" : ""}`}
                       key={audio.id}
                     >
                       <div className="audio-order">
-                        <span>{String(index + 1).padStart(2, "0")}</span>
+                        <span>
+                          {manifestPosition
+                            ? String(manifestPosition).padStart(2, "0")
+                            : "—"}
+                        </span>
                         <div>
                           <button
                             type="button"
                             aria-label={`Subir ${audio.name}`}
-                            disabled={index === 0}
-                            onClick={() => moveAudio(audio.id, -1)}
+                            disabled={
+                              isExcluded || includedGroupPosition === 0
+                            }
+                            onClick={() =>
+                              moveAudio(
+                                audio.id,
+                                -1,
+                                visibleIncludedAssociationAudioIds,
+                              )
+                            }
                           >
                             <ArrowUp size={15} />
                           </button>
                           <button
                             type="button"
                             aria-label={`Bajar ${audio.name}`}
-                            disabled={index === orderedAudios.length - 1}
-                            onClick={() => moveAudio(audio.id, 1)}
+                            disabled={
+                              isExcluded ||
+                              includedGroupPosition ===
+                                visibleIncludedAssociationAudioIds.length - 1
+                            }
+                            onClick={() =>
+                              moveAudio(
+                                audio.id,
+                                1,
+                                visibleIncludedAssociationAudioIds,
+                              )
+                            }
                           >
                             <ArrowDown size={15} />
                           </button>
@@ -1597,7 +1925,7 @@ export function PruebaDigitalApp() {
                         <div className="audio-card-heading">
                           <div>
                             <span className="group-pill">
-                              Grupo {audio.group}
+                              Carpeta {audio.group}
                             </span>
                             <h2 title={audio.name}>{audio.name}</h2>
                           </div>
@@ -1636,7 +1964,7 @@ export function PruebaDigitalApp() {
                                 <div>
                                   <h3>Elegí la captura</h3>
                                   <p>
-                                    Elegí una o más capturas del mismo grupo.
+                                    Elegí una o más capturas de la misma carpeta.
                                   </p>
                                 </div>
                                 {(associations[audio.id] ?? []).length > 0 && (
@@ -1951,7 +2279,7 @@ export function PruebaDigitalApp() {
                           <strong>Incluir capturas sin audio</strong>
                           <small>
                             Se guardarán en 02_Capturas_sin_audio, separadas por
-                            grupo.
+                            carpeta.
                           </small>
                         </span>
                       </label>
@@ -2060,6 +2388,7 @@ export function PruebaDigitalApp() {
                   disabled={
                     isGenerating ||
                     duplicatePaths.length > 0 ||
+                    duplicateGroupNames.length > 0 ||
                     publicUrlIsInvalid
                   }
                   onClick={() => void generatePackage()}

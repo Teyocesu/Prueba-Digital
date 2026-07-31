@@ -101,6 +101,27 @@ await Promise.all([
   writeFile(resolve(folderRoot, "__MACOSX", "._Audio A original.ogg"), audioA),
 ]);
 
+const multipleFolderRoot = resolve(
+  outputDirectory,
+  "multiple-folder-case",
+  "CARPETAS_PARA_SELECCIONAR_JUNTAS",
+);
+await Promise.all(
+  ["A", "B"].map((name) =>
+    mkdir(resolve(multipleFolderRoot, name), { recursive: true }),
+  ),
+);
+await Promise.all([
+  writeFile(resolve(multipleFolderRoot, "A", "A1 Captura.png"), onePixelPng),
+  writeFile(resolve(multipleFolderRoot, "A", "Audio 1.ogg"), makeWav(0.31, 11)),
+  writeFile(resolve(multipleFolderRoot, "A", "Audio 2.ogg"), makeWav(0.32, 12)),
+  writeFile(resolve(multipleFolderRoot, "A", "Audio 3.ogg"), makeWav(0.33, 13)),
+  writeFile(resolve(multipleFolderRoot, "B", "B1 Captura.png"), onePixelPng),
+  writeFile(resolve(multipleFolderRoot, "B", "Audio 4.ogg"), makeWav(0.34, 14)),
+  writeFile(resolve(multipleFolderRoot, "B", "Audio 5.ogg"), makeWav(0.35, 15)),
+  writeFile(resolve(multipleFolderRoot, "B", "Audio 6.ogg"), makeWav(0.36, 16)),
+]);
+
 await writeFile(resolve(outputDirectory, "control.bin"), audioA);
 const modified = Uint8Array.from(audioA);
 modified[modified.length - 1] ^= 0x01;

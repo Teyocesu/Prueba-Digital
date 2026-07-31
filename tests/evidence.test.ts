@@ -336,6 +336,61 @@ describe("nombres y basura de macOS", () => {
       loaded.groups[0].images[0].id,
     );
   });
+
+  it("mantiene separadas dos carpetas raíz y asocia su captura sólo a los tres audios propios", async () => {
+    const captureA = makeFolderFile(
+      makeJpeg(),
+      "Captura A.jpg",
+      "A/Captura A.jpg",
+    );
+    const captureB = makeFolderFile(
+      makeJpeg(),
+      "Captura B.jpg",
+      "B/Captura B.jpg",
+    );
+    const inputs = [
+      makeFolderFile(makeWav(101), "Audio A 1.wav", "A/Audio A 1.wav"),
+      makeFolderFile(makeWav(201), "Audio B 1.wav", "B/Audio B 1.wav"),
+      captureA,
+      makeFolderFile(makeWav(102), "Audio A 2.wav", "A/Audio A 2.wav"),
+      captureB,
+      makeFolderFile(makeWav(202), "Audio B 2.wav", "B/Audio B 2.wav"),
+      makeFolderFile(makeWav(103), "Audio A 3.wav", "A/Audio A 3.wav"),
+      makeFolderFile(makeWav(203), "Audio B 3.wav", "B/Audio B 3.wav"),
+    ];
+
+    const loaded = await loadEvidenceFiles(inputs);
+    const [groupA, groupB] = loaded.groups;
+
+    expect(loaded.groups.map((group) => group.name)).toEqual(["A", "B"]);
+    expect(groupA.images).toHaveLength(1);
+    expect(groupA.audios).toHaveLength(3);
+    expect(groupB.images).toHaveLength(1);
+    expect(groupB.audios).toHaveLength(3);
+
+    expect(
+      groupA.audios.every(
+        (audio) =>
+          audio.associatedCaptureId === groupA.images[0].id &&
+          audio.associatedCaptureIds.length === 1 &&
+          audio.associatedCaptureIds[0] === groupA.images[0].id,
+      ),
+    ).toBe(true);
+    expect(
+      groupB.audios.every(
+        (audio) =>
+          audio.associatedCaptureId === groupB.images[0].id &&
+          audio.associatedCaptureIds.length === 1 &&
+          audio.associatedCaptureIds[0] === groupB.images[0].id,
+      ),
+    ).toBe(true);
+    expect(groupA.audios.map((audio) => audio.associatedCaptureId)).not.toContain(
+      groupB.images[0].id,
+    );
+    expect(groupB.audios.map((audio) => audio.associatedCaptureId)).not.toContain(
+      groupA.images[0].id,
+    );
+  });
 });
 
 describe("SHA-256", () => {
