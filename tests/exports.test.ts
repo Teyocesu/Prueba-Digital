@@ -169,8 +169,8 @@ describe("nomenclatura según el material incluido", () => {
       pdfFilename: "MANIFIESTO_SHA256_VIDEOS.pdf",
       csvFilename: "INVENTARIO_VIDEOS_SHA256.csv",
       txtFilename: "MANIFIESTO_SHA256_VIDEOS.txt",
-      primaryFolder: "01_Videos_con_capturas",
-      secondaryFolder: "02_Capturas_sin_video",
+      primaryFolder: "01_Evidencia_de_video",
+      secondaryFolder: "02_Capturas_sin_asociar",
       title:
         "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE VIDEO",
     });
@@ -180,8 +180,8 @@ describe("nomenclatura según el material incluido", () => {
       pdfFilename: "MANIFIESTO_SHA256_MULTIMEDIA.pdf",
       csvFilename: "INVENTARIO_MULTIMEDIA_SHA256.csv",
       txtFilename: "MANIFIESTO_SHA256_MULTIMEDIA.txt",
-      primaryFolder: "01_Archivos_multimedia_con_capturas",
-      secondaryFolder: "02_Capturas_sin_multimedia",
+      primaryFolder: "01_Evidencia_multimedia",
+      secondaryFolder: "02_Capturas_sin_asociar",
       title:
         "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO Y VIDEO",
     });
@@ -323,11 +323,19 @@ describe("motor de exportación ZIP", () => {
           name: "Captura video.png",
           group: "Carpeta V",
           bytes: Uint8Array.from([137, 80, 78, 71]),
+          associated: true,
+        },
+        {
+          name: "Captura no asociada.png",
+          group: "Carpeta V",
+          bytes: Uint8Array.from([137, 80, 78, 71, 1]),
+          associated: false,
         },
         {
           name: "Captura sin video.jpg",
           group: "Sólo capturas",
           bytes: Uint8Array.from([255, 216, 255]),
+          associated: false,
         },
       ],
       manifestPdf,
@@ -358,6 +366,8 @@ describe("motor de exportación ZIP", () => {
         videoPath,
         `${naming.primaryFolder}/${video.group}/Captura video.png`,
         `${naming.secondaryFolder}/`,
+        `${naming.secondaryFolder}/${video.group}/`,
+        `${naming.secondaryFolder}/${video.group}/Captura no asociada.png`,
         `${naming.secondaryFolder}/Sólo capturas/`,
         `${naming.secondaryFolder}/Sólo capturas/Captura sin video.jpg`,
         naming.pdfFilename,
@@ -456,6 +466,8 @@ describe("motor de exportación ZIP", () => {
     expect(txt).not.toContain("MARCADOR_INTERNO_VIDEO");
     expect(filing).toContain("archivos de audio y video");
     expect(filing).toContain(naming.pdfFilename);
+    expect(filing).toContain("dispositivo o soporte original");
+    expect(filing).not.toContain("dispositivo móvil");
     expect(filing).toContain(`Archivo 1 (Audio): “${audio.name}”`);
     expect(filing).toContain(`Archivo 2 (Video): “${video.name}”`);
 

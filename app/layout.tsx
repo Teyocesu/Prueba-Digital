@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(publicOrigin),
   title: "Prueba Digital | Hash SHA-256 y manifiesto judicial",
   description:
-    "Prepará archivos de audio y capturas para una presentación judicial, con procesamiento local y verificación SHA-256.",
+    "Prepará audios, videos y capturas para una presentación judicial, con procesamiento local y verificación SHA-256.",
   alternates: {
     canonical: "/",
   },
@@ -31,6 +31,8 @@ export const metadata: Metadata = {
     "prueba digital",
     "integridad de archivos",
     "manifiesto judicial",
+    "evidencia audiovisual",
+    "hash de videos",
   ],
   openGraph: {
     type: "website",
@@ -38,7 +40,7 @@ export const metadata: Metadata = {
     url: "/",
     title: "Prueba Digital | Hash SHA-256 y manifiesto judicial",
     description:
-      "Organizá audios y capturas, calculá SHA-256 y generá un paquete judicial sin subir tus archivos.",
+      "Organizá audios, videos y capturas, calculá SHA-256 y generá un paquete judicial sin subir tus archivos.",
     images: [
       {
         url: "/og.png",
@@ -52,7 +54,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Prueba Digital",
     description:
-      "Preparación local de archivos, hashes SHA-256 y manifiesto judicial.",
+      "Preparación local de audios, videos y capturas con hashes SHA-256 y manifiesto judicial.",
     images: ["/og.png"],
   },
 };

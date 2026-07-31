@@ -249,6 +249,7 @@ describe("duración WAV", () => {
       formatted: "00:58.283",
     });
     expect(formatDuration(71_851)).toBe("01:11.851");
+    expect(formatDuration(5_400_123)).toBe("01:30:00.123");
   });
 
   it("rechaza un WAV truncado", () => {

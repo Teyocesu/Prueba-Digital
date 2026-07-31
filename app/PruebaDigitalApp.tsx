@@ -19,6 +19,7 @@ import {
   FileImage,
   FileQuestion,
   FileText,
+  FileVideo,
   Fingerprint,
   FolderOpen,
   Hash,
@@ -45,30 +46,28 @@ import {
 } from "react";
 import {
   type EvidenceFile,
+  formatDuration,
   isValidSha256,
   loadEvidenceFiles,
   sha256,
 } from "../lib/evidence";
 import {
-  type ExportAudio,
+  type ExportMedia,
   type ExportCapture,
   type ManifestSettings,
-  EVIDENCE_ZIP_FILENAME,
+  evidenceNamingForMedia,
   FILING_TEXT_FILENAME,
   generateEvidenceZip,
   generateFilingText,
   generateInventoryCsv,
   generateManifestPdf,
   generateManifestTxt,
-  INVENTORY_CSV_FILENAME,
-  MANIFEST_PDF_FILENAME,
-  MANIFEST_TXT_FILENAME,
 } from "../lib/exports";
 
-const APP_VERSION = "1.0.0";
+const APP_VERSION = "1.1.0";
 
 const DEFAULT_CONCLUSION =
-  "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original para su correspondiente examen técnico.";
+  "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo o soporte original del cual proviene el material, cuando corresponda, para su examen técnico.";
 
 type AppMode = "home" | "prepare" | "verify";
 
@@ -79,7 +78,7 @@ type ManifestForm = {
   observations: string;
   conclusion: string;
   publicUrl: string;
-  includeCapturesWithoutAudio: boolean;
+  includeCapturesWithoutMedia: boolean;
 };
 
 type GeneratedPackage = {
@@ -89,6 +88,10 @@ type GeneratedPackage = {
   integrityTotal: number;
   zipSize: number;
   pdfSize: number;
+  zipFilename: string;
+  pdfFilename: string;
+  csvFilename: string;
+  txtFilename: string;
 };
 
 const STEPS = [
@@ -115,7 +118,7 @@ function initialManifest(): ManifestForm {
     observations: "",
     conclusion: DEFAULT_CONCLUSION,
     publicUrl: "",
-    includeCapturesWithoutAudio: true,
+    includeCapturesWithoutMedia: true,
   };
 }
 
@@ -142,6 +145,19 @@ function detectedLabel(file: EvidenceFile) {
     mp3: "MP3",
     m4a: "M4A",
     aac: "AAC",
+    mp4: "MP4",
+    m4v: "M4V",
+    mov: "QuickTime/MOV",
+    "3gp": "3GP",
+    "3g2": "3G2",
+    webm: "WebM",
+    mkv: "Matroska/MKV",
+    avi: "AVI",
+    ogv: "Ogg/Theora",
+    mpeg: "MPEG",
+    mpegts: "MPEG-TS",
+    wmv: "ASF/WMV",
+    flv: "FLV",
     jpeg: "JPEG",
     png: "PNG",
     webp: "WebP",
@@ -159,6 +175,19 @@ function detectedMime(file: EvidenceFile) {
     mp3: "audio/mpeg",
     m4a: "audio/mp4",
     aac: "audio/aac",
+    mp4: "video/mp4",
+    m4v: "video/x-m4v",
+    mov: "video/quicktime",
+    "3gp": "video/3gpp",
+    "3g2": "video/3gpp2",
+    webm: "video/webm",
+    mkv: "video/x-matroska",
+    avi: "video/x-msvideo",
+    ogv: "video/ogg",
+    mpeg: "video/mpeg",
+    mpegts: "video/mp2t",
+    wmv: "video/x-ms-wmv",
+    flv: "video/x-flv",
     jpeg: "image/jpeg",
     png: "image/png",
     webp: "image/webp",
@@ -167,6 +196,8 @@ function detectedMime(file: EvidenceFile) {
   const fallback =
     file.kind === "audio"
       ? "audio/wav"
+      : file.kind === "video"
+        ? "video/mp4"
       : file.kind === "image"
         ? "image/jpeg"
         : "application/octet-stream";
@@ -179,6 +210,10 @@ function quantityLabel(
   plural = `${singular}s`,
 ) {
   return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function breakableName(value: string) {
+  return value.replace(/([_-])/gu, "$1\u200b");
 }
 
 function isValidHttpsUrl(value: string) {
@@ -242,6 +277,69 @@ async function hashFileInWorker(file: File): Promise<string> {
     };
 
     worker.postMessage({ id, buffer }, [buffer]);
+  });
+}
+
+async function inspectMediaPreview(
+  evidence: EvidenceFile,
+  previewUrl: string,
+): Promise<boolean> {
+  if (evidence.kind !== "audio" && evidence.kind !== "video") return false;
+
+  const element = document.createElement(evidence.kind);
+  const mime = detectedMime(evidence).split(";", 1)[0];
+  if (!element.canPlayType(mime)) return false;
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    let metadataLoaded = false;
+    const saveFiniteDuration = () => {
+      if (!Number.isFinite(element.duration) || element.duration < 0) {
+        return false;
+      }
+      evidence.durationMs = Math.round(element.duration * 1000);
+      evidence.duration = formatDuration(element.duration * 1000);
+      return true;
+    };
+    const finish = (previewable: boolean) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeout);
+      element.onloadedmetadata = null;
+      element.onloadeddata = null;
+      element.oncanplay = null;
+      element.ondurationchange = null;
+      element.onseeked = null;
+      element.onerror = null;
+      element.removeAttribute("src");
+      element.load();
+      resolve(previewable);
+    };
+    const timeout = window.setTimeout(() => finish(false), 4_000);
+    element.preload = "auto";
+    element.onloadedmetadata = () => {
+      metadataLoaded = true;
+      if (saveFiniteDuration()) return;
+
+      // Algunos WebM creados con MediaRecorder omiten la duración del encabezado.
+      // Buscar el final permite que el navegador la calcule sin alterar el archivo.
+      try {
+        element.currentTime = Number.MAX_SAFE_INTEGER;
+      } catch {
+        finish(true);
+      }
+    };
+    element.ondurationchange = () => {
+      if (metadataLoaded) saveFiniteDuration();
+    };
+    element.onseeked = () => {
+      if (metadataLoaded) saveFiniteDuration();
+    };
+    element.onloadeddata = () => finish(true);
+    element.oncanplay = () => finish(true);
+    element.onerror = () => finish(false);
+    element.src = previewUrl;
+    element.load();
   });
 }
 
@@ -462,8 +560,8 @@ function FooterNote() {
       <p>
         <strong>Alcance del hash.</strong> Permite verificar la integridad de un
         archivo desde que se calculó su huella digital. Por sí solo no acredita
-        autoría, identidad de la voz, fecha, origen del mensaje ni autenticidad
-        integral de la conversación. La valoración y eventual pericia
+        autoría, identidad de las personas o voces, fecha, origen del material
+        ni autenticidad de su contenido. La valoración y eventual pericia
         corresponden al Tribunal.
       </p>
     </aside>
@@ -472,6 +570,7 @@ function FooterNote() {
 
 function EmptyIcon({ kind }: { kind: EvidenceFile["kind"] }) {
   if (kind === "audio") return <FileAudio size={19} />;
+  if (kind === "video") return <FileVideo size={19} />;
   if (kind === "image") return <FileImage size={19} />;
   return <FileQuestion size={19} />;
 }
@@ -486,7 +585,7 @@ export function PruebaDigitalApp() {
   const [associations, setAssociations] = useState<Record<string, string[]>>(
     {},
   );
-  const [audioOrder, setAudioOrder] = useState<string[]>([]);
+  const [mediaOrder, setMediaOrder] = useState<string[]>([]);
   const [activeAssociationGroupId, setActiveAssociationGroupId] = useState<
     string | null
   >(null);
@@ -497,8 +596,11 @@ export function PruebaDigitalApp() {
   const [manifestTxtText, setManifestTxtText] = useState("");
   const [filingText, setFilingText] = useState("");
   const [filingTextEdited, setFilingTextEdited] = useState(false);
-  const [lastExportAudios, setLastExportAudios] = useState<ExportAudio[]>([]);
+  const [lastExportMedia, setLastExportMedia] = useState<ExportMedia[]>([]);
   const [previewUrls, setPreviewUrls] = useState<Record<string, string>>({});
+  const [previewableMediaIds, setPreviewableMediaIds] = useState<Set<string>>(
+    new Set(),
+  );
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("");
@@ -539,6 +641,17 @@ export function PruebaDigitalApp() {
     () => files.filter((file) => file.kind === "audio"),
     [files],
   );
+  const videos = useMemo(
+    () => files.filter((file) => file.kind === "video"),
+    [files],
+  );
+  const mediaFiles = useMemo(
+    () =>
+      files.filter(
+        (file) => file.kind === "audio" || file.kind === "video",
+      ),
+    [files],
+  );
   const images = useMemo(
     () => files.filter((file) => file.kind === "image"),
     [files],
@@ -562,70 +675,74 @@ export function PruebaDigitalApp() {
       .sort((a, b) => a.name.localeCompare(b.name, "es", { numeric: true }));
   }, [files]);
 
-  const orderedAudios = useMemo(() => {
-    const byId = new Map(audios.map((audio) => [audio.id, audio]));
-    const ordered = audioOrder
+  const orderedMedia = useMemo(() => {
+    const byId = new Map(mediaFiles.map((media) => [media.id, media]));
+    const ordered = mediaOrder
       .map((id) => byId.get(id))
-      .filter((audio): audio is EvidenceFile => Boolean(audio));
-    const included = new Set(ordered.map((audio) => audio.id));
+      .filter((media): media is EvidenceFile => Boolean(media));
+    const included = new Set(ordered.map((media) => media.id));
     return [
       ...ordered,
-      ...audios
-        .filter((audio) => !included.has(audio.id))
+      ...mediaFiles
+        .filter((media) => !included.has(media.id))
         .sort((a, b) =>
           `${a.group}/${a.name}`.localeCompare(`${b.group}/${b.name}`, "es", {
             numeric: true,
           }),
         ),
     ];
-  }, [audios, audioOrder]);
+  }, [mediaFiles, mediaOrder]);
 
-  const orderedAudiosByGroup = useMemo(
+  const orderedMediaByGroup = useMemo(
     () =>
       groups.flatMap((group) =>
-        orderedAudios.filter((audio) => audio.groupId === group.id),
+        orderedMedia.filter((media) => media.groupId === group.id),
       ),
-    [groups, orderedAudios],
+    [groups, orderedMedia],
   );
 
-  const includedAudios = useMemo(
+  const includedMedia = useMemo(
     () =>
-      orderedAudiosByGroup.filter((audio) => !excludedIds.has(audio.id)),
-    [excludedIds, orderedAudiosByGroup],
+      orderedMediaByGroup.filter((media) => !excludedIds.has(media.id)),
+    [excludedIds, orderedMediaByGroup],
   );
 
-  const manifestPositionByAudioId = useMemo(
+  const manifestPositionByMediaId = useMemo(
     () =>
       new Map(
-        includedAudios.map((audio, index) => [audio.id, index + 1] as const),
+        includedMedia.map((media, index) => [media.id, index + 1] as const),
       ),
-    [includedAudios],
+    [includedMedia],
   );
 
   const associationGroups = useMemo(
     () =>
       groups
         .map((group) => {
-          const groupAudios = orderedAudios.filter(
-            (audio) => audio.groupId === group.id,
+          const groupMedia = orderedMedia.filter(
+            (media) => media.groupId === group.id,
           );
           const groupImages = images.filter(
             (image) => image.groupId === group.id,
           );
-          const pendingAssociations = groupAudios.filter(
-            (audio) =>
-              !excludedIds.has(audio.id) &&
-              (associations[audio.id] ?? []).length === 0,
-          ).length;
+          const unassociatedMedia = groupMedia.filter(
+            (media) =>
+              !excludedIds.has(media.id) &&
+              (associations[media.id] ?? []).length === 0,
+          );
+          const pendingAssociations =
+            groupImages.length > 0 ? unassociatedMedia.length : 0;
           return {
             ...group,
-            audios: groupAudios,
+            media: groupMedia,
             captures: groupImages,
             pendingAssociations,
+            withoutAvailableCapture:
+              groupImages.length === 0 ? unassociatedMedia.length : 0,
           };
         })
-        .filter((group) => group.audios.length > 0),
-    [associations, excludedIds, groups, images, orderedAudios],
+        .filter((group) => group.media.length > 0),
+    [associations, excludedIds, groups, images, orderedMedia],
   );
 
   const activeAssociationGroup =
@@ -635,13 +752,25 @@ export function PruebaDigitalApp() {
     associationGroups.find((group) => group.pendingAssociations > 0) ??
     associationGroups[0];
 
-  const visibleAssociationAudios = activeAssociationGroup?.audios ?? [];
-  const visibleIncludedAssociationAudioIds = visibleAssociationAudios
-    .filter((audio) => !excludedIds.has(audio.id))
-    .map((audio) => audio.id);
+  const visibleAssociationMedia = activeAssociationGroup?.media ?? [];
+  const visibleIncludedAssociationMediaIds = visibleAssociationMedia
+    .filter((media) => !excludedIds.has(media.id))
+    .map((media) => media.id);
   const activeAssociationGroupIndex = associationGroups.findIndex(
     (group) => group.id === activeAssociationGroup?.id,
   );
+
+  useEffect(() => {
+    if (step !== 3 || activeAssociationGroupIndex < 0) return;
+    const frame = requestAnimationFrame(() => {
+      document
+        .getElementById(
+          `association-folder-tab-${activeAssociationGroupIndex}`,
+        )
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeAssociationGroupIndex, step]);
 
   const duplicatePaths = useMemo(() => {
     const counts = new Map<string, number>();
@@ -673,12 +802,35 @@ export function PruebaDigitalApp() {
       .map(({ name }) => name);
   }, [groups]);
 
-  const audiosWithoutCapture = useMemo(
+  const mediaWithoutCapture = useMemo(
     () =>
-      includedAudios.filter(
-        (audio) => (associations[audio.id] ?? []).length === 0,
+      includedMedia.filter(
+        (media) => (associations[media.id] ?? []).length === 0,
       ),
-    [associations, includedAudios],
+    [associations, includedMedia],
+  );
+  const mediaAwaitingCaptureChoice = useMemo(
+    () =>
+      mediaWithoutCapture.filter((media) =>
+        images.some((image) => image.groupId === media.groupId),
+      ),
+    [images, mediaWithoutCapture],
+  );
+  const associatedCaptureIds = useMemo(
+    () =>
+      new Set(
+        includedMedia.flatMap((media) => associations[media.id] ?? []),
+      ),
+    [associations, includedMedia],
+  );
+  const currentNaming = useMemo(
+    () =>
+      evidenceNamingForMedia(
+        includedMedia.map((media) => ({
+          kind: media.kind as "audio" | "video",
+        })),
+      ),
+    [includedMedia],
   );
 
   const publicUrlValue = manifest.publicUrl.trim();
@@ -723,7 +875,7 @@ export function PruebaDigitalApp() {
     const prefix = `b${batchNumber}-`;
 
     try {
-      const result = await loadEvidenceFiles(input, { hashAudio: false });
+      const result = await loadEvidenceFiles(input, { hashMedia: false });
       const idMap = new Map(
         result.files.map((file) => [file.id, `${prefix}${file.id}`]),
       );
@@ -740,28 +892,51 @@ export function PruebaDigitalApp() {
       }));
 
       const nextAssociations: Record<string, string[]> = {};
-      const preparedAudios = prepared.filter((file) => file.kind === "audio");
-      for (let index = 0; index < preparedAudios.length; index += 1) {
-        const file = preparedAudios[index];
+      const preparedMedia = prepared.filter(
+        (file) => file.kind === "audio" || file.kind === "video",
+      );
+      for (let index = 0; index < preparedMedia.length; index += 1) {
+        const file = preparedMedia[index];
         setLoadingLabel(
-          `Calculando la huella del audio ${index + 1} de ${preparedAudios.length}… No cierres esta ventana.`,
+          `Calculando la huella del archivo ${index + 1} de ${preparedMedia.length}… No cierres esta ventana.`,
         );
         const hash =
           file.sha256 && isValidSha256(file.sha256)
             ? file.sha256
             : await hashFileInWorker(file.file);
         file.sha256 = hash;
-        if (file.associatedCaptureId) {
-          nextAssociations[file.id] = [file.associatedCaptureId];
+        if (file.associatedCaptureIds.length > 0) {
+          nextAssociations[file.id] = [...file.associatedCaptureIds];
         }
       }
 
       const nextPreviewUrls: Record<string, string> = {};
       prepared
-        .filter((file) => file.kind === "audio" || file.kind === "image")
+        .filter(
+          (file) =>
+            file.kind === "audio" ||
+            file.kind === "video" ||
+            file.kind === "image",
+        )
         .forEach((file) => {
           nextPreviewUrls[file.id] = registerPreviewUrl(file);
         });
+      if (preparedMedia.length > 0) {
+        setLoadingLabel("Leyendo la duración disponible, sin modificar nada…");
+        const previewability = await Promise.all(
+          preparedMedia.map((file) =>
+            inspectMediaPreview(file, nextPreviewUrls[file.id]),
+          ),
+        );
+        const previewableIds = preparedMedia
+          .filter((_, index) => previewability[index])
+          .map((file) => file.id);
+        setPreviewableMediaIds((current) => {
+          const next = new Set(current);
+          previewableIds.forEach((id) => next.add(id));
+          return next;
+        });
+      }
 
       setFiles((current) => [...current, ...prepared]);
       setPreviewUrls((current) => ({ ...current, ...nextPreviewUrls }));
@@ -778,10 +953,12 @@ export function PruebaDigitalApp() {
         ...result.warnings.map(displayListItem),
       ]);
       setAssociations((current) => ({ ...current, ...nextAssociations }));
-      setAudioOrder((current) => [
+      setMediaOrder((current) => [
         ...current,
         ...prepared
-          .filter((file) => file.kind === "audio")
+          .filter(
+            (file) => file.kind === "audio" || file.kind === "video",
+          )
           .sort((a, b) =>
             `${a.group}/${a.name}`.localeCompare(`${b.group}/${b.name}`, "es", {
               numeric: true,
@@ -834,24 +1011,24 @@ export function PruebaDigitalApp() {
     })();
   }
 
-  function toggleAssociation(audioId: string, captureId: string) {
+  function toggleAssociation(mediaId: string, captureId: string) {
     setAssociations((current) => {
-      const selected = current[audioId] ?? [];
+      const selected = current[mediaId] ?? [];
       return {
         ...current,
-        [audioId]: selected.includes(captureId)
+        [mediaId]: selected.includes(captureId)
           ? selected.filter((id) => id !== captureId)
           : [...selected, captureId],
       };
     });
   }
 
-  function moveAudio(
+  function moveMedia(
     id: string,
     direction: -1 | 1,
     visibleIds: readonly string[],
   ) {
-    setAudioOrder((current) => {
+    setMediaOrder((current) => {
       const visibleIndex = visibleIds.indexOf(id);
       const targetVisibleIndex = visibleIndex + direction;
       if (
@@ -938,58 +1115,51 @@ export function PruebaDigitalApp() {
       timeZone: manifest.timeZone,
       caseReference: manifest.caseReference || undefined,
       observations: manifest.observations || undefined,
-      title: "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO",
       conclusion: manifest.conclusion,
       publicUrl: manifest.publicUrl || undefined,
     };
   }
 
-  function buildExportAudios(): ExportAudio[] {
-    return includedAudios.map((audio) => {
-      const captureNames = (associations[audio.id] ?? [])
+  function buildExportMedia(): ExportMedia[] {
+    return includedMedia.map((media) => {
+      const captureNames = (associations[media.id] ?? [])
         .map((captureId) => files.find((file) => file.id === captureId)?.name)
         .filter((name): name is string => Boolean(name));
 
       return {
-        name: audio.name,
-        group: audio.group,
-        bytes: audio.file,
-        duration: audio.duration ?? "No disponible",
-        byteLength: audio.size,
-        detectedType: detectedLabel(audio),
-        originalExtension: audio.extension,
-        sha256: audio.sha256 ?? "",
+        kind: media.kind as "audio" | "video",
+        name: media.name,
+        group: media.group,
+        bytes: media.file,
+        duration: media.duration ?? "No disponible",
+        byteLength: media.size,
+        detectedType: detectedLabel(media),
+        originalExtension: media.extension,
+        sha256: media.sha256 ?? "",
         captureNames,
       };
     });
   }
 
   function buildExportCaptures(): ExportCapture[] {
-    const groupsWithIncludedAudio = new Set(
-      includedAudios.map((audio) => audio.groupId),
-    );
-    const associatedIds = new Set(
-      includedAudios.flatMap((audio) => associations[audio.id] ?? []),
-    );
-
     return images
       .filter((image) => {
-        if (associatedIds.has(image.id)) return true;
-        return (
-          manifest.includeCapturesWithoutAudio &&
-          !groupsWithIncludedAudio.has(image.groupId)
-        );
+        if (associatedCaptureIds.has(image.id)) return true;
+        return manifest.includeCapturesWithoutMedia;
       })
       .map((image) => ({
         name: image.name,
         group: image.group,
         bytes: image.file,
+        associated: associatedCaptureIds.has(image.id),
       }));
   }
 
   async function generatePackage() {
-    if (!includedAudios.length) {
-      setGenerateError("Incluí al menos un audio antes de generar el paquete.");
+    if (!includedMedia.length) {
+      setGenerateError(
+        "Incluí al menos un audio o video antes de generar el paquete.",
+      );
       return;
     }
     if (duplicatePaths.length) {
@@ -1007,26 +1177,26 @@ export function PruebaDigitalApp() {
       return;
     }
     if (
-      includedAudios.some(
-        (audio) => !audio.sha256 || !isValidSha256(audio.sha256),
+      includedMedia.some(
+        (media) => !media.sha256 || !isValidSha256(media.sha256),
       )
     ) {
       setGenerateError(
-        "Uno o más audios no tienen un hash SHA-256 válido. Volvé a cargarlos.",
+        "Uno o más archivos no tienen un hash SHA-256 válido. Volvé a cargarlos.",
       );
       return;
     }
     if (
-      includedAudios.some(
-        (audio) => (associations[audio.id] ?? []).length === 0,
+      includedMedia.some(
+        (media) => (associations[media.id] ?? []).length === 0,
       )
     ) {
-      const missingNames = includedAudios
-        .filter((audio) => (associations[audio.id] ?? []).length === 0)
-        .map((audio) => `• ${audio.name}`)
+      const missingNames = includedMedia
+        .filter((media) => (associations[media.id] ?? []).length === 0)
+        .map((media) => `• ${media.name}`)
         .join("\n");
       const proceed = window.confirm(
-        `Estos audios no tienen una captura asociada:\n\n${missingNames}\n\n¿Querés generar el paquete de todos modos?`,
+        `Estos archivos no tienen una captura asociada:\n\n${missingNames}\n\n¿Querés generar el paquete de todos modos?`,
       );
       if (!proceed) return;
     }
@@ -1036,22 +1206,24 @@ export function PruebaDigitalApp() {
     revokeGeneratedUrls();
 
     try {
-      const exportAudios = buildExportAudios();
+      const exportMedia = buildExportMedia();
       const exportCaptures = buildExportCaptures();
       const settings = manifestSettings();
+      const naming = evidenceNamingForMedia(exportMedia);
 
-      const pdfBytes = await generateManifestPdf(exportAudios, settings);
-      const inventoryCsv = generateInventoryCsv(exportAudios);
-      const manifestTxt = generateManifestTxt(exportAudios, settings);
+      const pdfBytes = await generateManifestPdf(exportMedia, settings);
+      const inventoryCsv = generateInventoryCsv(exportMedia);
+      const manifestTxt = generateManifestTxt(exportMedia, settings);
       const nextFilingText = generateFilingText(
-        exportAudios,
+        exportMedia,
         manifest.publicUrl || undefined,
       );
 
       const zipResult = await generateEvidenceZip({
-        audios: exportAudios,
+        media: exportMedia,
         captures: exportCaptures,
         manifestPdf: pdfBytes,
+        naming,
       });
 
       const zipBlob = blobFromBytes(zipResult.zipBytes, "application/zip");
@@ -1065,7 +1237,7 @@ export function PruebaDigitalApp() {
         (entry) => entry.matches,
       ).length;
 
-      setLastExportAudios(exportAudios);
+      setLastExportMedia(exportMedia);
       setInventoryCsvText(inventoryCsv);
       setManifestTxtText(manifestTxt);
       setFilingText(nextFilingText);
@@ -1074,9 +1246,13 @@ export function PruebaDigitalApp() {
         zipUrl,
         pdfUrl,
         integrityCount,
-        integrityTotal: exportAudios.length,
+        integrityTotal: exportMedia.length,
         zipSize: zipBlob.size,
         pdfSize: pdfBlob.size,
+        zipFilename: naming.zipFilename,
+        pdfFilename: naming.pdfFilename,
+        csvFilename: naming.csvFilename,
+        txtFilename: naming.txtFilename,
       });
       setStep(5);
       window.scrollTo({ top: 0, behavior: "smooth" });
@@ -1101,7 +1277,7 @@ export function PruebaDigitalApp() {
       return;
     }
     const next = generateFilingText(
-      lastExportAudios,
+      lastExportMedia,
       manifest.publicUrl || undefined,
     );
     setFilingText(next);
@@ -1127,7 +1303,7 @@ export function PruebaDigitalApp() {
     setRejected([]);
     setLoadWarnings([]);
     setAssociations({});
-    setAudioOrder([]);
+    setMediaOrder([]);
     setActiveAssociationGroupId(null);
     setExcludedIds(new Set());
     setManifest(initialManifest());
@@ -1136,8 +1312,9 @@ export function PruebaDigitalApp() {
     setManifestTxtText("");
     setFilingText("");
     setFilingTextEdited(false);
-    setLastExportAudios([]);
+    setLastExportMedia([]);
     setPreviewUrls({});
+    setPreviewableMediaIds(new Set());
     setLoadError(null);
     setGenerateError(null);
     setStep(1);
@@ -1218,9 +1395,8 @@ export function PruebaDigitalApp() {
                 Prepará tu prueba digital, <em>sin alterar los archivos.</em>
               </h1>
               <p className="hero-lead">
-                Organizá audios y capturas de WhatsApp, calculá sus huellas
-                SHA-256 y generá un manifiesto claro para tu presentación
-                judicial.
+                Organizá audios, videos y capturas, calculá sus huellas SHA-256
+                y generá un manifiesto claro para tu presentación judicial.
               </p>
               <div className="hero-actions">
                 <button
@@ -1268,7 +1444,7 @@ export function PruebaDigitalApp() {
                 {[
                   ["01", "Cargá", "ZIP, carpetas o archivos sueltos"],
                   ["02", "Revisá", "Formato real, tamaño y duración"],
-                  ["03", "Asociá", "Cada audio con su captura"],
+                  ["03", "Asociá", "Cada archivo con su captura"],
                   ["04", "Generá", "PDF, inventario y texto"],
                   ["05", "Verificá", "Copias idénticas byte por byte"],
                 ].map(([number, title, text], index) => (
@@ -1309,7 +1485,7 @@ export function PruebaDigitalApp() {
               </span>
               <div>
                 <h3>Archivos intactos</h3>
-                <p>No convierte, renombra ni recomprime los audios.</p>
+                <p>No convierte, renombra ni recomprime los originales.</p>
               </div>
             </article>
             <article>
@@ -1401,6 +1577,9 @@ export function PruebaDigitalApp() {
                     <span className="local-only">
                       <LockKeyhole size={14} /> Nada sale de este dispositivo
                     </span>
+                    <span className="selection-limit">
+                      Hasta 256 MB por archivo y 1 GB por selección.
+                    </span>
                   </>
                 )}
                 <input
@@ -1409,7 +1588,7 @@ export function PruebaDigitalApp() {
                   type="file"
                   multiple
                   className="file-input-visually-hidden"
-                  accept=".zip,.ogg,.opus,.wav,.mp3,.m4a,.aac,.jpg,.jpeg,.png,.webp,.heic,audio/*,image/*"
+                  accept=".zip,.ogg,.opus,.wav,.mp3,.m4a,.aac,.mp4,.m4v,.mov,.qt,.3gp,.3g2,.webm,.mkv,.avi,.ogv,.mpeg,.mpg,.vob,.ts,.mts,.m2ts,.wmv,.asf,.flv,.jpg,.jpeg,.png,.webp,.heic,.heif,audio/*,video/*,image/*"
                   onChange={handleFileInput}
                 />
                 <input
@@ -1470,6 +1649,11 @@ export function PruebaDigitalApp() {
                       <FileAudio size={18} />
                       <strong>{audios.length}</strong>{" "}
                       {audios.length === 1 ? "audio" : "audios"}
+                    </span>
+                    <span>
+                      <FileVideo size={18} />
+                      <strong>{videos.length}</strong>{" "}
+                      {videos.length === 1 ? "video" : "videos"}
                     </span>
                     <span>
                       <FileImage size={18} />
@@ -1548,7 +1732,7 @@ export function PruebaDigitalApp() {
                   className="primary-button"
                   type="button"
                   disabled={
-                    audios.length === 0 ||
+                    mediaFiles.length === 0 ||
                     isLoading ||
                     duplicateGroupNames.length > 0
                   }
@@ -1588,6 +1772,11 @@ export function PruebaDigitalApp() {
                   {audios.length === 1 ? "audio" : "audios"}
                 </span>
                 <span>
+                  <FileVideo size={18} />
+                  <strong>{videos.length}</strong>{" "}
+                  {videos.length === 1 ? "video" : "videos"}
+                </span>
+                <span>
                   <FileImage size={18} />
                   <strong>{images.length}</strong>{" "}
                   {images.length === 1 ? "captura" : "capturas"}
@@ -1606,6 +1795,9 @@ export function PruebaDigitalApp() {
                   const groupAudios = group.files.filter(
                     (file) => file.kind === "audio",
                   );
+                  const groupVideos = group.files.filter(
+                    (file) => file.kind === "video",
+                  );
                   const groupImages = group.files.filter(
                     (file) => file.kind === "image",
                   );
@@ -1620,15 +1812,18 @@ export function PruebaDigitalApp() {
                           <p>
                             {groupAudios.length} audio
                             {groupAudios.length === 1 ? "" : "s"} ·{" "}
+                            {groupVideos.length} video
+                            {groupVideos.length === 1 ? "" : "s"} ·{" "}
                             {groupImages.length} captura
                             {groupImages.length === 1 ? "" : "s"}
                           </p>
                         </div>
-                        {groupAudios.length > 0 && groupImages.length === 1 && (
+                        {groupAudios.length + groupVideos.length > 0 &&
+                          groupImages.length === 1 && (
                           <span className="auto-badge">
                             <BadgeCheck size={15} /> Asociación automática
                           </span>
-                        )}
+                          )}
                       </div>
                       <div className="file-table">
                         {group.files.map((file) => (
@@ -1724,7 +1919,7 @@ export function PruebaDigitalApp() {
                   <ArrowLeft size={17} /> Volver
                 </button>
                 <button className="primary-button" onClick={() => setStep(3)}>
-                  Asociar audios y capturas <ArrowRight size={17} />
+                  Asociar archivos y capturas <ArrowRight size={17} />
                 </button>
               </div>
             </section>
@@ -1735,14 +1930,14 @@ export function PruebaDigitalApp() {
               <SectionHeading
                 eyebrow="Paso 3 de 5"
                 title="Revisá una carpeta por vez"
-                description="Elegí una carpeta desde las pestañas. Si contiene una sola captura, ya la asociamos automáticamente a todos sus audios."
+                description="Elegí una carpeta desde las pestañas. Si contiene una sola captura, ya la asociamos automáticamente a todos sus audios y videos."
                 action={
                   <div className="heading-stat">
-                    <strong>{includedAudios.length}</strong>
+                    <strong>{includedMedia.length}</strong>
                     <span>
-                      {includedAudios.length === 1
-                        ? "audio incluido"
-                        : "audios incluidos"}
+                      {includedMedia.length === 1
+                        ? "archivo incluido"
+                        : "archivos incluidos"}
                     </span>
                   </div>
                 }
@@ -1762,7 +1957,7 @@ export function PruebaDigitalApp() {
                     <div
                       className="folder-tabs"
                       role="tablist"
-                      aria-label="Carpetas con audios"
+                      aria-label="Carpetas con audios y videos"
                     >
                       {associationGroups.map((group, index) => {
                         const selected =
@@ -1788,11 +1983,22 @@ export function PruebaDigitalApp() {
                           >
                             <FolderOpen size={19} />
                             <span>
-                              <strong>Carpeta {group.name}</strong>
+                              <strong>
+                                Carpeta {breakableName(group.name)}
+                              </strong>
                               <small>
                                 {quantityLabel(
-                                  group.audios.length,
+                                  group.media.filter(
+                                    (file) => file.kind === "audio",
+                                  ).length,
                                   "audio",
+                                )}{" "}
+                                ·{" "}
+                                {quantityLabel(
+                                  group.media.filter(
+                                    (file) => file.kind === "video",
+                                  ).length,
+                                  "video",
                                 )}{" "}
                                 ·{" "}
                                 {quantityLabel(
@@ -1816,6 +2022,15 @@ export function PruebaDigitalApp() {
                                     "pendiente",
                                   )}
                                 </>
+                              ) : group.withoutAvailableCapture > 0 ? (
+                                <>
+                                  <Info size={13} />
+                                  {quantityLabel(
+                                    group.withoutAvailableCapture,
+                                    "sin captura",
+                                    "sin captura",
+                                  )}
+                                </>
                               ) : (
                                 <>
                                   <Check size={13} /> Lista
@@ -1834,19 +2049,30 @@ export function PruebaDigitalApp() {
                     </span>
                     <div>
                       <span className="mini-label">Carpeta seleccionada</span>
-                      <h2>Carpeta {activeAssociationGroup.name}</h2>
+                      <h2>
+                        Carpeta {breakableName(activeAssociationGroup.name)}
+                      </h2>
                       <p>
                         {quantityLabel(
-                          activeAssociationGroup.audios.length,
-                          "audio",
+                          activeAssociationGroup.media.filter(
+                            (media) => !excludedIds.has(media.id),
+                          ).length,
+                          "archivo",
                         )}{" "}
                         ·{" "}
-                        {activeAssociationGroup.pendingAssociations === 0
-                          ? "todas las asociaciones están listas"
-                          : quantityLabel(
+                        {activeAssociationGroup.pendingAssociations > 0
+                          ? quantityLabel(
                               activeAssociationGroup.pendingAssociations,
                               "asociación pendiente",
-                            )}
+                              "asociaciones pendientes",
+                            )
+                          : activeAssociationGroup.withoutAvailableCapture > 0
+                            ? quantityLabel(
+                                activeAssociationGroup.withoutAvailableCapture,
+                                "archivo sin captura disponible",
+                                "archivos sin captura disponible",
+                              )
+                            : "todas las asociaciones están listas"}
                       </p>
                     </div>
                   </div>
@@ -1863,16 +2089,16 @@ export function PruebaDigitalApp() {
                     : undefined
                 }
               >
-                {visibleAssociationAudios.map((audio) => {
+                {visibleAssociationMedia.map((audio) => {
                   const groupCaptures = images.filter(
                     (image) => image.groupId === audio.groupId,
                   );
                   const isExcluded = excludedIds.has(audio.id);
-                  const manifestPosition = manifestPositionByAudioId.get(
+                  const manifestPosition = manifestPositionByMediaId.get(
                     audio.id,
                   );
                   const includedGroupPosition =
-                    visibleIncludedAssociationAudioIds.indexOf(audio.id);
+                    visibleIncludedAssociationMediaIds.indexOf(audio.id);
                   return (
                     <article
                       className={`audio-card${isExcluded ? " is-excluded" : ""}`}
@@ -1892,10 +2118,10 @@ export function PruebaDigitalApp() {
                               isExcluded || includedGroupPosition === 0
                             }
                             onClick={() =>
-                              moveAudio(
+                              moveMedia(
                                 audio.id,
                                 -1,
-                                visibleIncludedAssociationAudioIds,
+                                visibleIncludedAssociationMediaIds,
                               )
                             }
                           >
@@ -1907,13 +2133,13 @@ export function PruebaDigitalApp() {
                             disabled={
                               isExcluded ||
                               includedGroupPosition ===
-                                visibleIncludedAssociationAudioIds.length - 1
+                                visibleIncludedAssociationMediaIds.length - 1
                             }
                             onClick={() =>
-                              moveAudio(
+                              moveMedia(
                                 audio.id,
                                 1,
-                                visibleIncludedAssociationAudioIds,
+                                visibleIncludedAssociationMediaIds,
                               )
                             }
                           >
@@ -1924,9 +2150,21 @@ export function PruebaDigitalApp() {
                       <div className="audio-content">
                         <div className="audio-card-heading">
                           <div>
-                            <span className="group-pill">
-                              Carpeta {audio.group}
-                            </span>
+                            <div className="media-label-row">
+                              <span
+                                className={`media-kind-badge is-${audio.kind}`}
+                              >
+                                {audio.kind === "video" ? (
+                                  <FileVideo size={13} />
+                                ) : (
+                                  <FileAudio size={13} />
+                                )}
+                                {audio.kind === "video" ? "Video" : "Audio"}
+                              </span>
+                              <span className="group-pill">
+                                Carpeta {breakableName(audio.group)}
+                              </span>
+                            </div>
                             <h2 title={audio.name}>{audio.name}</h2>
                           </div>
                           <button
@@ -1950,21 +2188,67 @@ export function PruebaDigitalApp() {
 
                         {!isExcluded && (
                           <>
-                            <audio
-                              className="audio-player"
-                              controls
-                              preload="metadata"
-                              src={previewUrls[audio.id]}
-                            >
-                              Tu navegador no puede reproducir este audio.
-                            </audio>
+                            <div className="media-preview">
+                              {previewableMediaIds.has(audio.id) ? (
+                                audio.kind === "video" ? (
+                                  <video
+                                    className="video-player"
+                                    controls
+                                    playsInline
+                                    preload="metadata"
+                                    src={previewUrls[audio.id]}
+                                  >
+                                    Tu navegador no puede reproducir este
+                                    video.
+                                  </video>
+                                ) : (
+                                  <audio
+                                    className="audio-player"
+                                    controls
+                                    preload="metadata"
+                                    src={previewUrls[audio.id]}
+                                  >
+                                    Tu navegador no puede reproducir este
+                                    audio.
+                                  </audio>
+                                )
+                              ) : (
+                                <div className="preview-unavailable">
+                                  {audio.kind === "video" ? (
+                                    <FileVideo size={24} />
+                                  ) : (
+                                    <FileAudio size={24} />
+                                  )}
+                                  <div>
+                                    <strong>Vista previa no disponible</strong>
+                                    <span>
+                                      El original igual se conserva sin cambios
+                                      y su huella ya fue calculada.
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                              <a
+                                className="original-download-link"
+                                href={previewUrls[audio.id]}
+                                download={audio.name}
+                              >
+                                <Download size={15} /> Descargar este original
+                              </a>
+                            </div>
 
                             <div className="capture-section">
                               <div className="capture-heading">
                                 <div>
-                                  <h3>Elegí la captura</h3>
+                                  <h3>
+                                    {groupCaptures.length > 0
+                                      ? "Elegí la captura"
+                                      : "Sin capturas en esta carpeta"}
+                                  </h3>
                                   <p>
-                                    Elegí una o más capturas de la misma carpeta.
+                                    {groupCaptures.length > 0
+                                      ? "Elegí una o más capturas de la misma carpeta."
+                                      : "Podés continuar: el archivo se incluirá sin captura."}
                                   </p>
                                 </div>
                                 {(associations[audio.id] ?? []).length > 0 && (
@@ -2026,7 +2310,7 @@ export function PruebaDigitalApp() {
                               ) : (
                                 <div className="empty-captures">
                                   <FileImage size={20} />
-                                  No hay capturas en el grupo {audio.group}.
+                                  No cargaste capturas en la carpeta {audio.group}.
                                 </div>
                               )}
                               {groupCaptures.length > 0 &&
@@ -2037,7 +2321,7 @@ export function PruebaDigitalApp() {
                                   >
                                     <AlertTriangle size={17} />
                                     Falta elegir al menos una captura para este
-                                    audio.
+                                    archivo.
                                   </div>
                                 )}
                             </div>
@@ -2061,7 +2345,7 @@ export function PruebaDigitalApp() {
                                   </strong>
                                 </span>
                                 <span>
-                                  <small>Formato interno del audio</small>
+                                  <small>Formato del archivo</small>
                                   <strong>{detectedLabel(audio)}</strong>
                                 </span>
                               </div>
@@ -2101,23 +2385,32 @@ export function PruebaDigitalApp() {
                 })}
               </div>
 
-              {audiosWithoutCapture.length > 0 && (
+              {mediaWithoutCapture.length > 0 && (
                 <div
-                  className="alert alert-warning association-summary"
+                  className={`alert ${
+                    mediaAwaitingCaptureChoice.length > 0
+                      ? "alert-warning"
+                      : "alert-info"
+                  } association-summary`}
                   role="status"
                 >
-                  <AlertTriangle size={19} />
+                  {mediaAwaitingCaptureChoice.length > 0 ? (
+                    <AlertTriangle size={19} />
+                  ) : (
+                    <Info size={19} />
+                  )}
                   <div>
                     <strong>
                       {quantityLabel(
-                        audiosWithoutCapture.length,
-                        "audio todavía no tiene captura",
-                        "audios todavía no tienen captura",
+                        mediaWithoutCapture.length,
+                        "archivo se presentará sin captura",
+                        "archivos se presentarán sin captura",
                       )}
                     </strong>
                     <p>
-                      Podés continuar, pero te conviene elegir una captura para
-                      cada audio antes de preparar el manifiesto.
+                      {mediaAwaitingCaptureChoice.length > 0
+                        ? "Podés asociar arriba las capturas disponibles. Si una carpeta no tiene capturas, continuá normalmente."
+                        : "No cargaste capturas para esas carpetas. Podés continuar normalmente."}
                     </p>
                   </div>
                 </div>
@@ -2129,7 +2422,7 @@ export function PruebaDigitalApp() {
                 </button>
                 <button
                   className="primary-button"
-                  disabled={includedAudios.length === 0}
+                  disabled={includedMedia.length === 0}
                   onClick={() => setStep(4)}
                 >
                   Continuar al manifiesto <ArrowRight size={17} />
@@ -2267,19 +2560,19 @@ export function PruebaDigitalApp() {
                       <label className="check-row">
                         <input
                           type="checkbox"
-                          checked={manifest.includeCapturesWithoutAudio}
+                          checked={manifest.includeCapturesWithoutMedia}
                           onChange={(event) =>
                             updateManifest(
-                              "includeCapturesWithoutAudio",
+                              "includeCapturesWithoutMedia",
                               event.target.checked,
                             )
                           }
                         />
                         <span>
-                          <strong>Incluir capturas sin audio</strong>
-                          <small>
-                            Se guardarán en 02_Capturas_sin_audio, separadas por
-                            carpeta.
+                            <strong>Incluir capturas no asociadas</strong>
+                            <small>
+                              Se guardarán en {currentNaming.secondaryFolder},
+                              separadas por carpeta.
                           </small>
                         </span>
                       </label>
@@ -2299,18 +2592,17 @@ export function PruebaDigitalApp() {
                           <FolderOpen size={15} />
                         </span>
                         <div>
-                          <strong>01_Audios_con_capturas</strong>
+                          <strong>{currentNaming.primaryFolder}</strong>
                           <small>
-                            {quantityLabel(includedAudios.length, "audio")} ·{" "}
+                            {quantityLabel(includedMedia.length, "archivo")} ·{" "}
                             {quantityLabel(
-                              includedAudios.length -
-                                audiosWithoutCapture.length,
+                              includedMedia.length - mediaWithoutCapture.length,
                               "con captura",
                               "con captura",
                             )}{" "}
                             ·{" "}
                             {quantityLabel(
-                              audiosWithoutCapture.length,
+                              mediaWithoutCapture.length,
                               "sin captura",
                               "sin captura",
                             )}
@@ -2322,16 +2614,13 @@ export function PruebaDigitalApp() {
                           <FolderOpen size={15} />
                         </span>
                         <div>
-                          <strong>02_Capturas_sin_audio</strong>
+                          <strong>{currentNaming.secondaryFolder}</strong>
                           <small>
-                            {manifest.includeCapturesWithoutAudio
+                            {manifest.includeCapturesWithoutMedia
                               ? quantityLabel(
                                   images.filter(
                                     (image) =>
-                                      !includedAudios.some(
-                                        (audio) =>
-                                          audio.groupId === image.groupId,
-                                      ),
+                                      !associatedCaptureIds.has(image.id),
                                   ).length,
                                   "captura",
                                 )
@@ -2342,7 +2631,7 @@ export function PruebaDigitalApp() {
                       <li>
                         <FileText size={18} />
                         <div>
-                          <strong>{MANIFEST_PDF_FILENAME}</strong>
+                          <strong>{currentNaming.pdfFilename}</strong>
                           <small>PDF con nombres y huellas SHA-256</small>
                         </div>
                       </li>
@@ -2420,7 +2709,7 @@ export function PruebaDigitalApp() {
                 <p>
                   Comprobamos que {generated.integrityCount} de{" "}
                   {generated.integrityTotal} copias dentro del ZIP son idénticas
-                  a los audios que cargaste.
+                  a los archivos que cargaste.
                 </p>
                 <div className="verified-pill">
                   <BadgeCheck size={18} />
@@ -2428,7 +2717,7 @@ export function PruebaDigitalApp() {
                 </div>
                 <p className="result-scope">
                   Esta comprobación no determina quién creó el archivo ni la
-                  autenticidad de la conversación.
+                  autenticidad de su contenido.
                 </p>
               </div>
 
@@ -2436,7 +2725,7 @@ export function PruebaDigitalApp() {
                 <a
                   className="download-card is-primary"
                   href={generated.zipUrl}
-                  download={EVIDENCE_ZIP_FILENAME}
+                  download={generated.zipFilename}
                 >
                   <span className="download-icon">
                     <FileArchive size={25} />
@@ -2456,7 +2745,7 @@ export function PruebaDigitalApp() {
                 <a
                   className="download-card"
                   href={generated.pdfUrl}
-                  download={MANIFEST_PDF_FILENAME}
+                  download={generated.pdfFilename}
                 >
                   <span className="download-icon">
                     <FileText size={24} />
@@ -2506,7 +2795,7 @@ export function PruebaDigitalApp() {
                         onClick={() =>
                           downloadTextFile(
                             inventoryCsvText,
-                            INVENTORY_CSV_FILENAME,
+                            generated.csvFilename,
                             "text/csv;charset=utf-8",
                           )
                         }
@@ -2540,7 +2829,7 @@ export function PruebaDigitalApp() {
                         onClick={() =>
                           downloadTextFile(
                             manifestTxtText,
-                            MANIFEST_TXT_FILENAME,
+                            generated.txtFilename,
                           )
                         }
                       >
@@ -2700,7 +2989,7 @@ export function PruebaDigitalApp() {
                   <button
                     className="small-button full-width"
                     type="button"
-                    disabled={!lastExportAudios.length || !hasValidPublicUrl}
+                    disabled={!lastExportMedia.length || !hasValidPublicUrl}
                     onClick={refreshFilingText}
                   >
                     <Link2 size={15} /> Actualizar texto con el enlace

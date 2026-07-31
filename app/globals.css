@@ -898,6 +898,12 @@ a {
   font-weight: 650;
 }
 
+.selection-limit {
+  margin-top: 7px;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+}
+
 .loading-bar {
   overflow: hidden;
   width: min(340px, 70%);
@@ -1003,7 +1009,7 @@ a {
 .summary-stats,
 .review-summary {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
 }
 
 .summary-stats span,
@@ -1105,7 +1111,7 @@ a {
 }
 
 .review-summary {
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
 }
 
 .group-list {
@@ -1200,6 +1206,11 @@ a {
 .file-kind-audio {
   background: var(--terracotta-soft);
   color: var(--terracotta);
+}
+
+.file-kind-video {
+  background: var(--gold-soft);
+  color: #725625;
 }
 
 .file-kind-image {
@@ -1450,6 +1461,10 @@ a {
   background: var(--forest-soft);
 }
 
+.active-folder-heading > div {
+  min-width: 0;
+}
+
 .active-folder-icon {
   display: flex;
   width: 42px;
@@ -1463,6 +1478,7 @@ a {
 }
 
 .active-folder-heading h2 {
+  overflow-wrap: anywhere;
   margin: 3px 0 0;
   color: var(--forest);
   font-size: 18px;
@@ -1541,6 +1557,8 @@ a {
 
 .group-pill {
   display: inline-flex;
+  max-width: 100%;
+  overflow-wrap: anywhere;
   padding: 4px 7px;
   border-radius: 6px;
   background: var(--forest-soft);
@@ -1549,6 +1567,36 @@ a {
   font-weight: 750;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  white-space: normal;
+}
+
+.media-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.media-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 780;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.media-kind-badge.is-audio {
+  background: var(--terracotta-soft);
+  color: var(--terracotta);
+}
+
+.media-kind-badge.is-video {
+  background: var(--gold-soft);
+  color: #725625;
 }
 
 .audio-card-heading h2 {
@@ -1582,11 +1630,74 @@ a {
   color: var(--forest);
 }
 
+.media-preview {
+  margin-top: 18px;
+}
+
 .audio-player {
   width: 100%;
   height: 38px;
-  margin-top: 18px;
   accent-color: var(--terracotta);
+}
+
+.video-player {
+  display: block;
+  width: 100%;
+  max-height: 430px;
+  border: 1px solid #263746;
+  border-radius: 12px;
+  background: #101820;
+  object-fit: contain;
+  accent-color: var(--terracotta);
+}
+
+.preview-unavailable {
+  display: flex;
+  min-height: 82px;
+  align-items: center;
+  gap: 12px;
+  padding: 15px 17px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 11px;
+  background: var(--surface-soft);
+  color: var(--forest);
+}
+
+.preview-unavailable svg {
+  flex: 0 0 auto;
+}
+
+.preview-unavailable strong,
+.preview-unavailable span {
+  display: block;
+}
+
+.preview-unavailable strong {
+  font-size: 14px;
+}
+
+.preview-unavailable span {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.original-download-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 7px;
+  margin-top: 8px;
+  color: var(--forest);
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.original-download-link:hover {
+  color: var(--terracotta);
 }
 
 .technical-grid {
@@ -1878,7 +1989,7 @@ a {
 
 .manifest-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 330px;
+  grid-template-columns: minmax(0, 1fr) 380px;
   gap: 22px;
   align-items: start;
 }
@@ -3051,14 +3162,18 @@ a {
     grid-template-columns: 1fr 1fr;
   }
 
-  .summary-stats span:nth-child(2),
-  .review-summary span:nth-child(2) {
+  .summary-stats span:nth-child(even),
+  .review-summary span:nth-child(even) {
     border-right: 0;
   }
 
-  .review-summary span:last-child {
-    grid-column: 1 / -1;
+  .summary-stats span:nth-child(n + 3),
+  .review-summary span:nth-child(n + 3) {
     border-top: 1px solid var(--line);
+  }
+
+  .summary-stats span:last-child {
+    grid-column: 1 / -1;
   }
 
   .group-header {
@@ -3094,9 +3209,25 @@ a {
   }
 
   .folder-tab {
-    min-width: 250px;
+    min-width: 100%;
     min-height: 76px;
+    flex-basis: 100%;
+    grid-template-columns: 24px minmax(0, 1fr);
     scroll-snap-align: start;
+  }
+
+  .folder-tab-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .folder-tab strong {
+    display: -webkit-box;
+    overflow: hidden;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .active-folder-heading {

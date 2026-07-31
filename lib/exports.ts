@@ -70,6 +70,8 @@ export interface ExportCapture {
   name: string;
   group: string;
   bytes: ExportBinary;
+  /** Si se conoce, define si la captura acompaña a un medio o queda separada. */
+  associated?: boolean;
 }
 
 export interface ManifestSettings {
@@ -174,8 +176,8 @@ const VIDEO_ONLY_NAMING: EvidenceExportNaming = {
   pdfFilename: "MANIFIESTO_SHA256_VIDEOS.pdf",
   csvFilename: "INVENTARIO_VIDEOS_SHA256.csv",
   txtFilename: "MANIFIESTO_SHA256_VIDEOS.txt",
-  primaryFolder: "01_Videos_con_capturas",
-  secondaryFolder: "02_Capturas_sin_video",
+  primaryFolder: "01_Evidencia_de_video",
+  secondaryFolder: "02_Capturas_sin_asociar",
   title: "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE VIDEO",
 };
 
@@ -185,8 +187,8 @@ const MIXED_MEDIA_NAMING: EvidenceExportNaming = {
   pdfFilename: "MANIFIESTO_SHA256_MULTIMEDIA.pdf",
   csvFilename: "INVENTARIO_MULTIMEDIA_SHA256.csv",
   txtFilename: "MANIFIESTO_SHA256_MULTIMEDIA.txt",
-  primaryFolder: "01_Archivos_multimedia_con_capturas",
-  secondaryFolder: "02_Capturas_sin_multimedia",
+  primaryFolder: "01_Evidencia_multimedia",
+  secondaryFolder: "02_Capturas_sin_asociar",
   title:
     "MANIFIESTO DE IDENTIFICACIÓN Y HASH SHA-256 DE ARCHIVOS DE AUDIO Y VIDEO",
 };
@@ -237,7 +239,7 @@ function defaultManifestTextIntroduction(
 }
 
 const DEFAULT_CONCLUSION =
-  "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original para su correspondiente examen técnico.";
+  "Se deja constancia de que los archivos alojados en el enlace público de solo lectura son los mismos respecto de los cuales se calcularon los valores SHA-256 precedentemente consignados.\n\nAsimismo, esta parte asume el compromiso de no modificar, sustituir ni eliminar dichos archivos durante la tramitación de las presentes actuaciones, y pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo o soporte original del cual proviene el material, cuando corresponda, para su examen técnico.";
 
 const A4_WIDTH = PageSizes.A4[0];
 const A4_HEIGHT = PageSizes.A4[1];
@@ -902,7 +904,7 @@ export function generateFilingText(
     "",
     materialDescription,
     "",
-    "Esta parte asume el compromiso de mantener disponibles y sin modificaciones, sustituciones ni eliminaciones los archivos alojados en el enlace denunciado durante la tramitación de las presentes actuaciones. Asimismo, pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo móvil original del cual proviene el material, para su examen técnico o análisis forense, en caso de considerarse necesario.",
+    "Esta parte asume el compromiso de mantener disponibles y sin modificaciones, sustituciones ni eliminaciones los archivos alojados en el enlace denunciado durante la tramitación de las presentes actuaciones. Asimismo, pone a disposición del Tribunal y del perito que eventualmente se designe el dispositivo o soporte original del cual proviene el material, cuando corresponda, para su examen técnico o análisis forense.",
     "",
     ...mediaSections.flatMap((section) => [section, ""]),
     `Asimismo, dentro del enlace denunciado se encuentra incorporado el archivo denominado “${naming.pdfFilename}”, en el que se individualizan los archivos, las capturas asociadas cuando corresponde, la duración, el tamaño y el correspondiente valor hash SHA-256.`,
@@ -926,11 +928,13 @@ function mediaZipPath(
 }
 
 function captureZipPath(
-  capture: Pick<ExportCapture, "group" | "name">,
+  capture: Pick<ExportCapture, "group" | "name" | "associated">,
   mediaGroups: ReadonlySet<string>,
   naming: EvidenceExportNaming,
 ): string {
-  const area = mediaGroups.has(capture.group)
+  const belongsWithMedia =
+    capture.associated ?? mediaGroups.has(capture.group);
+  const area = belongsWithMedia
     ? naming.primaryFolder
     : naming.secondaryFolder;
   return `${area}/${capture.group}/${capture.name}`;

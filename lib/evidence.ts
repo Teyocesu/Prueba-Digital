@@ -1054,11 +1054,16 @@ export function formatDuration(milliseconds: number): string {
   }
 
   const roundedMilliseconds = Math.round(milliseconds);
-  const minutes = Math.floor(roundedMilliseconds / 60_000);
+  const hours = Math.floor(roundedMilliseconds / 3_600_000);
+  const minutes = Math.floor((roundedMilliseconds % 3_600_000) / 60_000);
   const seconds = Math.floor((roundedMilliseconds % 60_000) / 1_000);
   const millis = roundedMilliseconds % 1_000;
 
-  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(millis).padStart(3, "0")}`;
+  return `${hours > 0 ? `${String(hours).padStart(2, "0")}:` : ""}${String(
+    minutes,
+  ).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(
+    millis,
+  ).padStart(3, "0")}`;
 }
 
 /**
