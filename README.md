@@ -100,3 +100,7 @@ configuración de OpenAI Sites en
 
 No se requieren variables de entorno, almacenamiento, cuentas ni servicios de
 backend.
+
+## Licencia
+
+Distribuido bajo la [licencia MIT](LICENSE).
