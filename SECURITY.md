@@ -1,5 +1,5 @@
-# Security policy
+# Política de seguridad
 
-Prueba Digital is designed to process files in the browser. If you find a security issue, please do not open a public issue with exploit details or sensitive files.
+Prueba Digital está diseñada para procesar archivos en el navegador. Si encontrás un problema de seguridad, no abras un issue público con detalles de explotación ni archivos sensibles.
 
-Report it privately to the repository owner through GitHub. Include a clear description, affected version or commit, reproduction steps, and potential impact. Acknowledgement and remediation will be coordinated privately when possible.
+Reportalo de forma privada al propietario del repositorio a través de GitHub. Incluí una descripción clara, la versión o commit afectado, pasos de reproducción e impacto potencial. Cuando sea posible, la confirmación y corrección se coordinarán de forma privada.

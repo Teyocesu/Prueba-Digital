@@ -1,20 +1,20 @@
-# Contributing
+# Contribuciones
 
-Thanks for contributing to Prueba Digital.
+Gracias por contribuir a Prueba Digital.
 
-## Before opening a pull request
+## Antes de abrir un pull request
 
-1. Do not add real evidence, personal data, credentials, or private media files.
-2. Keep changes focused and document any user-visible behavior in the README when appropriate.
-3. Run the project checks locally:
+1. No agregues evidencias reales, datos personales, credenciales ni archivos multimedia privados.
+2. Mantené los cambios enfocados y documentá en el README cualquier cambio visible para el usuario cuando corresponda.
+3. Ejecutá las verificaciones del proyecto localmente:
 
    ```bash
    npm run lint
    npm test
    ```
 
-4. Describe the problem solved and the tests performed in the pull request.
+4. Describí el problema resuelto y las pruebas realizadas en el pull request.
 
-## Reporting issues
+## Reporte de problemas
 
-Include reproduction steps, expected behavior, actual behavior, and browser/version details. Do not attach real evidence or sensitive files; use synthetic fixtures instead.
+Incluí pasos para reproducirlo, comportamiento esperado y obtenido, además del navegador y su versión. No adjuntes evidencia real ni archivos sensibles; usá fixtures sintéticos.
